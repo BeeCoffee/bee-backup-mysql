@@ -557,10 +557,7 @@ Este projeto está licenciado sob a licença MIT - veja o arquivo [LICENSE](LICE
 
 ## 🆘 Suporte
 
-- 📧 Email: suporte@empresa.com
-- 💬 Slack: #backup-mysql
-- 📖 Wiki: [Link para documentação completa]
-- 🐛 Issues: [GitHub Issues]
+- 📧 Email: contato@beecoffee.com.br
 
 ---
 
