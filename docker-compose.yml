@@ -1,0 +1,49 @@
+services:
+  mariadb-backup:
+    build: .
+    container_name: mariadb_backup_scheduler
+    hostname: backup-scheduler
+    restart: unless-stopped
+    network_mode: host
+    privileged: true
+    
+    # Configurações de ambiente
+    env_file:
+      - .env
+    
+    # Volumes para persistência
+    volumes:
+      - ./backups:/backups:rw
+      - ./logs:/logs:rw
+      - ./config:/config:rw
+      - /etc/localtime:/etc/localtime:ro
+    
+    # Healthcheck personalizado
+    healthcheck:
+      test: ["CMD", "/scripts/healthcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    
+    # Configurações de recursos (opcional)
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 128M
+          cpus: '0.1'
+    
+    # Labels para organização
+    labels:
+      - "com.backup.service=mariadb-mysql"
+      - "com.backup.environment=production"
+      - "com.backup.version=1.0"
+
+# Rede isolada para o serviço (desabilitada - usando host network)
+# networks:
+#   backup_network:
+#     driver: bridge
+#     name: backup_network

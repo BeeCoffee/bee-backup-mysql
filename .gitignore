@@ -1,0 +1,36 @@
+# Arquivos de backup
+backups/
+*.sql
+*.sql.gz
+
+# Logs
+logs/
+*.log
+
+# Configurações sensíveis
+.env
+.env.local
+.env.production
+
+# Arquivos temporários
+config/ssmtp.conf
+config/revaliases
+tmp/
+
+# Docker
+.docker/
+
+# Arquivos do sistema
+.DS_Store
+Thumbs.db
+
+# Arquivos de desenvolvimento
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Arquivos de teste
+test_*.sql
+dump_*.sql
