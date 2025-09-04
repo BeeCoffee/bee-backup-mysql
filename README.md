@@ -2,12 +2,65 @@
 
 ![Docker](https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white)
 ![MariaDB](https://img.shields.io/badge/MariaDB-003545?style=for-the-badge&logo=mariadb&logoColor=white)
-![MySQL](https://img.shields.io/badge/MySQL-4479A1?style=for-the-badge&logo=mysql&logoColor=white)
+![MySQL](https://img.shields.i### 🗜️ Opções do mysqldump
+
+```bash
+# Configuração completa para produção
+MYSQLDUMP_OPTIONS=--routines --triggers --single-transaction --add-drop-database --default-character-set=utf8mb4 --hex-blob --complete-insert
+
+# Para databases pequenos (< 1GB)
+MYSQLDUMP_OPTIONS=--complete-insert --extended-insert
+
+# Para databases grandes (> 5GB) - RECOMENDADO
+MYSQLDUMP_OPTIONS=--routines --triggers --single-transaction --add-drop-database --default-character-set=utf8mb4 --max_allowed_packet=1G --net_read_timeout=600 --net_write_timeout=600
+
+# Para databases muito grandes (> 20GB)
+MYSQLDUMP_OPTIONS=--single-transaction --quick --hex-blob --max_allowed_packet=2G --net_read_timeout=1200 --net_write_timeout=1200
+```
+
+### ⏱️ Configurações de Timeout para Databases Grandes
+
+Para databases de grande porte (10GB+), ajuste os timeouts no arquivo `.env`:
+
+```bash
+# Timeout padrão (databases pequenos)
+DB_TIMEOUT=30
+
+# Para databases médios (1-10GB)
+DB_TIMEOUT=300
+
+# Para databases grandes (10-50GB)  
+DB_TIMEOUT=900
+
+# Para databases muito grandes (50GB+)
+DB_TIMEOUT=1800
+```
+
+**Sinais de que você precisa ajustar timeouts:**
+- Erro: "Lost connection to server during query (2013)"
+- Timeouts durante backup de tabelas grandes
+- Backups que param na Etapa 1 (Extração)L-4479A1?style=for-the-badge&logo=mysql&logoColor=white)
 ![Alpine Linux](https://img.shields.io/badge/Alpine%20Linux-0D597F?style=for-the-badge&logo=alpine-linux&logoColor=white)
 
 Sistema automatizado de backup para MariaDB/MySQL usando Docker, com agendamento via cron, compressão, notificações e monitoramento integrado.
 
 ## 🎯 Características
+
+### 🚀 Modos de Operação
+
+O Backup Bee oferece dois modos de operação que são detectados automaticamente:
+
+#### 📦 Modo "Somente Backup"
+- **Ativação**: Quando `DEST_HOST` não está configurado ou está vazio
+- **Funcionalidade**: Realiza apenas backup dos dados do servidor origem
+- **Uso**: Ideal para backups de segurança local ou arquivamento
+- **Etapas**: Extração → Compressão → Verificação → Finalização
+
+#### 🔄 Modo "Backup + Restauração"  
+- **Ativação**: Quando `DEST_HOST` está configurado com servidor válido
+- **Funcionalidade**: Backup completo + restauração automática no destino
+- **Uso**: Perfeito para sincronização entre servidores ou migração de dados
+- **Etapas**: Extração → Compressão → Verificação → **Restauração** → Finalização
 
 ### ✨ Funcionalidades Principais
 
@@ -17,8 +70,9 @@ Sistema automatizado de backup para MariaDB/MySQL usando Docker, com agendamento
 - **📧 Notificações**: Suporte a email (SMTP) e webhooks (Slack/Discord/Teams)
 - **🏥 Healthcheck**: Monitoramento automático da saúde do sistema
 - **🔒 Segurança**: Execução com usuário não-root e validações robustas
-- **📊 Logs Estruturados**: Logs detalhados com timestamp e níveis
+- **📊 Logs Estruturados**: Logs detalhados com timestamp e níveis em 5 etapas
 - **🧹 Limpeza Automática**: Remoção automática de backups antigos
+- **🎯 Modo Condicional**: Backup apenas ou Backup + Restauração automática
 
 ### 🛠️ Funcionalidades Avançadas
 
@@ -28,6 +82,8 @@ Sistema automatizado de backup para MariaDB/MySQL usando Docker, com agendamento
 - **🎯 Restauração Flexível**: Suporte a arquivos .sql e .sql.gz
 - **🖥️ Interface de Linha de Comando**: Scripts utilitários para gerenciamento
 - **🌐 Multi-servidor**: Suporte a servidores de origem e destino diferentes
+- **⏱️ Timeouts Otimizados**: Configurações específicas para databases grandes (20GB+)
+- **📋 Logs Detalhados**: Sistema de logging em 5 etapas com rastreamento completo
 
 ## 📁 Estrutura do Projeto
 
@@ -48,7 +104,50 @@ backup-bee/
     └── 📄 send_webhook.sh          # Notificações via webhook
 ```
 
-## 🚀 Guia de Configuração
+## � Sistema de Logs Detalhados
+
+O Backup Bee implementa um sistema de logging em **5 etapas** para total visibilidade do processo:
+
+### 🔄 Etapas do Processo
+
+1. **🚀 [ETAPA 1/5] Extração de Dados**
+   - Conexão com servidor origem
+   - Execução do mysqldump
+   - Cálculo do tamanho do database
+   - Log: `"Iniciando extração de dados (mysqldump)..."`
+
+2. **📦 [ETAPA 2/5] Compressão** 
+   - Compressão gzip do arquivo SQL
+   - Cálculo de estatísticas de compressão
+   - Log: `"Iniciando compressão do arquivo..."`
+
+3. **🔍 [ETAPA 3/5] Verificação de Integridade**
+   - Validação da integridade do backup
+   - Verificação de checksums
+   - Log: `"Iniciando verificação de integridade..."`
+
+4. **🔄 [ETAPA 4/5] Restauração** *(apenas no modo Backup + Restauração)*
+   - Conexão com servidor destino
+   - Restauração dos dados no destino
+   - Log: `"Iniciando restauração no servidor destino..."`
+
+5. **✅ [ETAPA 5/5] Finalização**
+   - Limpeza de arquivos temporários
+   - Envio de notificações
+   - Log: `"Backup finalizado com sucesso!"`
+
+### 📋 Exemplo de Logs
+
+```bash
+[2025-09-03 20:47:44] [INFO] 🚀 [ETAPA 1/5] Iniciando extração de dados (mysqldump)...
+[2025-09-03 20:47:47] [INFO]    Tamanho do database: 21293.3 MB
+[2025-09-03 20:52:15] [INFO] 📦 [ETAPA 2/5] Iniciando compressão do arquivo...
+[2025-09-03 20:53:02] [INFO] 🔍 [ETAPA 3/5] Iniciando verificação de integridade...
+[2025-09-03 20:53:05] [INFO] 🔄 [ETAPA 4/5] Iniciando restauração no servidor destino...
+[2025-09-03 20:58:30] [INFO] ✅ [ETAPA 5/5] Backup finalizado com sucesso!
+```
+
+## �🚀 Guia de Configuração
 
 ### 1. Preparação do Ambiente
 
