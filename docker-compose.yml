@@ -16,6 +16,7 @@ services:
       - ./backups:/backups:rw
       - ./logs:/logs:rw
       - ./config:/config:rw
+      - ./scripts:/scripts:rw
       - /etc/localtime:/etc/localtime:ro
     
     # Healthcheck personalizado

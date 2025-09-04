@@ -4,7 +4,7 @@
 # SCRIPT DE BACKUP MARIADB/MYSQL
 # =============================================================================
 
-set -e
+# set -e temporariamente removido para debug
 
 # Cores para output
 RED='\033[0;31m'
@@ -167,9 +167,12 @@ backup_database() {
             # Restaurar no servidor de destino (somente se DEST_HOST estiver configurado)
             if [[ -n "${DEST_HOST}" && "${DEST_HOST}" != "" ]]; then
                 log "INFO" "   🔄 [ETAPA 4/5] Iniciando restauração no servidor de destino..."
-                restore_to_destination "$backup_file" "$database"
-                
-                log "SUCCESS" "🎉 [ETAPA 5/5] Backup completo do '$database' finalizado com sucesso!"
+                if restore_to_destination "$backup_file" "$database"; then
+                    log "SUCCESS" "🎉 [ETAPA 5/5] Backup completo do '$database' finalizado com sucesso!"
+                else
+                    log "ERROR" "❌ [ETAPA 4/5] Falha na restauração do '$database', mas backup local foi salvo"
+                    log "SUCCESS" "🎉 [ETAPA 4/4] Backup local do '$database' finalizado com sucesso!"
+                fi
                 log "INFO" "   📊 Tamanho final: ${file_size_mb} MB"
                 log "INFO" "   ⏱️  Tempo total: ${duration}s"
                 log "INFO" "   🎯 Backup + Restauração executados"
@@ -246,6 +249,25 @@ restore_to_destination() {
     log "INFO" "      👤 Usuário: ${DB_USERNAME}"
     log "INFO" "      📁 Database: ${database}"
     
+    # Verificar se o banco existe no destino e criá-lo se necessário
+    log "INFO" "      🔍 Verificando se o banco '$database' existe no destino..."
+    local check_db_cmd="mysql -h'$DEST_HOST' -P'$DEST_PORT' -u'$DB_USERNAME' -p'$DB_PASSWORD' -e 'SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME=\"$database\";'"
+    
+    if ! eval "$check_db_cmd" 2>/dev/null | grep -q "$database"; then
+        log "INFO" "      🏗️  Banco '$database' não existe. Criando..."
+        local create_db_cmd="mysql -h'$DEST_HOST' -P'$DEST_PORT' -u'$DB_USERNAME' -p'$DB_PASSWORD' -e 'CREATE DATABASE IF NOT EXISTS \`$database\`;'"
+        if ! eval "$create_db_cmd" 2>/tmp/mysql_create_error_${database}.log; then
+            log "ERROR" "   ❌ Falha ao criar banco '$database' no destino"
+            if [[ -f "/tmp/mysql_create_error_${database}.log" ]]; then
+                log "ERROR" "      📋 Erro detalhado: $(cat /tmp/mysql_create_error_${database}.log)"
+            fi
+            return 1
+        fi
+        log "SUCCESS" "      ✅ Banco '$database' criado com sucesso no destino"
+    else
+        log "INFO" "      ✅ Banco '$database' já existe no destino"
+    fi
+    
     # Preparar comando de restauração
     local restore_cmd="mysql -h'$DEST_HOST' -P'$DEST_PORT' -u'$DB_USERNAME' -p'$DB_PASSWORD' -f"
     
@@ -255,7 +277,7 @@ restore_to_destination() {
     
     if [[ "$backup_file" == *.gz ]]; then
         log "INFO" "      🗜️  Descomprimindo e aplicando backup comprimido..."
-        if zcat "$backup_file" | eval "$restore_cmd" 2>/tmp/mysql_restore_error_${database}.log; then
+        if { echo "USE \`$database\`;"; zcat "$backup_file"; } | eval "$restore_cmd" 2>/tmp/mysql_restore_error_${database}.log; then
             local end_time=$(date +%s)
             local duration=$((end_time - start_time))
             log "SUCCESS" "   ✅ [ETAPA 4/5] Restauração do '$database' concluída!"
@@ -271,7 +293,7 @@ restore_to_destination() {
         fi
     else
         log "INFO" "      📄 Aplicando backup não comprimido..."
-        if eval "$restore_cmd" < "$backup_file" 2>/tmp/mysql_restore_error_${database}.log; then
+        if { echo "USE \`$database\`;"; cat "$backup_file"; } | eval "$restore_cmd" 2>/tmp/mysql_restore_error_${database}.log; then
             local end_time=$(date +%s)
             local duration=$((end_time - start_time))
             log "SUCCESS" "   ✅ [ETAPA 4/5] Restauração do '$database' concluída!"

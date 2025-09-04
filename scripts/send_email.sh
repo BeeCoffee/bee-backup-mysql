@@ -26,10 +26,12 @@ root=${EMAIL_FROM}
 mailhub=${SMTP_SERVER}:${SMTP_PORT}
 hostname=$(hostname)
 AuthUser=${SMTP_USERNAME:-$EMAIL_FROM}
-AuthPass=${SMTP_PASSWORD:-$DB_PASSWORD}
-UseSTARTTLS=${SMTP_USE_TLS:-Yes}
-UseTLS=${SMTP_USE_TLS:-Yes}
+AuthPass=${SMTP_PASSWORD}
+UseSTARTTLS=Yes
+UseTLS=No
 FromLineOverride=YES
+AuthMethod=LOGIN
+TLS_CA_File=/etc/ssl/certs/ca-certificates.crt
 EOF
     
     # Criar aliases
