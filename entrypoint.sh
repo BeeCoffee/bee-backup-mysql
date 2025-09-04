@@ -140,7 +140,7 @@ setup_cron() {
         echo "WEBHOOK_URL=${WEBHOOK_URL}"
         echo ""
         echo "# Agendamento do backup"
-        echo "${BACKUP_TIME:-0 2 * * *} backup /scripts/backup.sh >> /logs/backup.log 2>&1"
+        echo "${BACKUP_TIME:-0 2 * * *} root /scripts/backup.sh >> /logs/backup.log 2>&1"
     } > "$cron_file"
     
     # Instalar o cron
