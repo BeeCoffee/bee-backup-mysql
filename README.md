@@ -152,11 +152,12 @@ O Backup Bee implementa um sistema de logging em **5 etapas** para total visibil
 ### 1. Preparação do Ambiente
 
 ```bash
-# Clonar ou criar o projeto
-mkdir backup-bee && cd backup-bee
+# Clonar o projeto do GitHub
+git clone https://github.com/BeeCoffee/bee-backup-mysql
+cd bee-backup-mysql
 
 # Criar diretórios necessários
-mkdir -p backups logs config scripts
+mkdir -p backups logs config
 ```
 
 ### 2. Configuração do .env
