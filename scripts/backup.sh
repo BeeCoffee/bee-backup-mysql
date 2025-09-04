@@ -30,16 +30,16 @@ log() {
     
     case $level in
         "INFO")
-            echo -e "${BLUE}[${timestamp}] [INFO]${NC} $message" | tee -a /logs/backup.log
+            echo -e "${BLUE}[${timestamp}] [INFO]${NC} $message" >> /logs/backup.log
             ;;
         "SUCCESS")
-            echo -e "${GREEN}[${timestamp}] [SUCCESS]${NC} $message" | tee -a /logs/backup.log
+            echo -e "${GREEN}[${timestamp}] [SUCCESS]${NC} $message" >> /logs/backup.log
             ;;
         "WARNING")
-            echo -e "${YELLOW}[${timestamp}] [WARNING]${NC} $message" | tee -a /logs/backup.log
+            echo -e "${YELLOW}[${timestamp}] [WARNING]${NC} $message" >> /logs/backup.log
             ;;
         "ERROR")
-            echo -e "${RED}[${timestamp}] [ERROR]${NC} $message" | tee -a /logs/backup.log
+            echo -e "${RED}[${timestamp}] [ERROR]${NC} $message" >> /logs/backup.log
             ;;
     esac
 }
