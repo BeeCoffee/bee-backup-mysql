@@ -93,6 +93,7 @@ backup_database() {
     local backup_file="/backups/${BACKUP_PREFIX:-backup}_${database}_${BACKUP_DATE}.sql"
     
     log "INFO" "📦 Iniciando backup do database '$database'..."
+    log "INFO" "   🚀 [ETAPA 1/5] Iniciando extração de dados (mysqldump)..."
     
     # Verificar se database existe no servidor de origem
     if ! database_exists "$database" "$SOURCE_HOST" "$SOURCE_PORT"; then
@@ -122,6 +123,8 @@ backup_database() {
         local end_time=$(date +%s)
         local duration=$((end_time - start_time))
         
+        log "SUCCESS" "   ✅ [ETAPA 1/5] Extração de dados concluída (${duration}s)"
+        
         # Verificar se arquivo foi criado e não está vazio
         if [[ -s "$backup_file" ]]; then
             local file_size=$(stat -c%s "$backup_file")
@@ -129,16 +132,21 @@ backup_database() {
             
             # Comprimir se habilitado
             if [[ "${BACKUP_COMPRESSION:-true}" == "true" ]]; then
-                log "INFO" "   🗜️  Comprimindo backup..."
+                log "INFO" "   🗜️  [ETAPA 2/5] Iniciando compressão do backup..."
+                local compress_start=$(date +%s)
                 if gzip "$backup_file"; then
+                    local compress_end=$(date +%s)
+                    local compress_duration=$((compress_end - compress_start))
                     backup_file="${backup_file}.gz"
                     local compressed_size=$(stat -c%s "$backup_file")
                     local compressed_size_mb=$(echo "scale=1; $compressed_size / 1024 / 1024" | bc 2>/dev/null || echo "0.0")
                     file_size_mb="$compressed_size_mb"
-                    log "INFO" "   ✅ Compressão concluída (${compressed_size_mb} MB)"
+                    log "SUCCESS" "   ✅ [ETAPA 2/5] Compressão concluída (${compressed_size_mb} MB em ${compress_duration}s)"
                 else
-                    log "WARNING" "   ⚠️  Falha na compressão, mantendo arquivo original"
+                    log "WARNING" "   ⚠️  [ETAPA 2/5] Falha na compressão, mantendo arquivo original"
                 fi
+            else
+                log "INFO" "   ⏭️  [ETAPA 2/5] Compressão desabilitada, pulando..."
             fi
             
             log "SUCCESS" "✅ Backup do '$database' concluído (${file_size_mb} MB em ${duration}s)"
@@ -146,11 +154,29 @@ backup_database() {
             
             # Verificar integridade se habilitado
             if [[ "${VERIFY_BACKUP_INTEGRITY:-true}" == "true" ]]; then
+                log "INFO" "   🔍 [ETAPA 3/5] Iniciando verificação de integridade..."
                 verify_backup_integrity "$backup_file" "$database"
+                log "SUCCESS" "   ✅ [ETAPA 3/5] Verificação de integridade concluída"
+            else
+                log "INFO" "   ⏭️  [ETAPA 3/5] Verificação de integridade desabilitada, pulando..."
             fi
             
-            # Restaurar no servidor de destino
-            restore_to_destination "$backup_file" "$database"
+            # Restaurar no servidor de destino (somente se DEST_HOST estiver configurado)
+            if [[ -n "${DEST_HOST}" && "${DEST_HOST}" != "" ]]; then
+                log "INFO" "   🔄 [ETAPA 4/5] Iniciando restauração no servidor de destino..."
+                restore_to_destination "$backup_file" "$database"
+                
+                log "SUCCESS" "🎉 [ETAPA 5/5] Backup completo do '$database' finalizado com sucesso!"
+                log "INFO" "   📊 Tamanho final: ${file_size_mb} MB"
+                log "INFO" "   ⏱️  Tempo total: ${duration}s"
+                log "INFO" "   🎯 Backup + Restauração executados"
+            else
+                log "INFO" "   ⏭️  [ETAPA 4/5] DEST_HOST não configurado - pulando restauração"
+                log "SUCCESS" "🎉 [ETAPA 4/4] Backup do '$database' finalizado com sucesso!"
+                log "INFO" "   📊 Tamanho final: ${file_size_mb} MB"
+                log "INFO" "   ⏱️  Tempo total: ${duration}s"
+                log "INFO" "   💾 Somente backup executado (sem restauração)"
+            fi
             
             ((SUCCESSFUL_BACKUPS++))
             return 0
@@ -212,36 +238,46 @@ restore_to_destination() {
     local database=$2
     
     log "INFO" "   🔄 Restaurando '$database' no servidor de destino..."
+    log "INFO" "      📍 Servidor: ${DEST_HOST}:${DEST_PORT}"
+    log "INFO" "      👤 Usuário: ${DB_USERNAME}"
+    log "INFO" "      📁 Database: ${database}"
     
     # Preparar comando de restauração
-    local restore_cmd="mysql -h'$DEST_HOST' -P'$DEST_PORT' -u'$DB_USERNAME' -p'$DB_PASSWORD'"
+    local restore_cmd="mysql -h'$DEST_HOST' -P'$DEST_PORT' -u'$DB_USERNAME' -p'$DB_PASSWORD' -f"
     
     # Executar restauração
     local start_time=$(date +%s)
+    log "INFO" "      ⏱️  Início da restauração: $(date '+%Y-%m-%d %H:%M:%S')"
     
     if [[ "$backup_file" == *.gz ]]; then
+        log "INFO" "      🗜️  Descomprimindo e aplicando backup comprimido..."
         if zcat "$backup_file" | eval "$restore_cmd" 2>/tmp/mysql_restore_error_${database}.log; then
             local end_time=$(date +%s)
             local duration=$((end_time - start_time))
-            log "SUCCESS" "   ✅ Restauração do '$database' concluída (${duration}s)"
+            log "SUCCESS" "   ✅ [ETAPA 4/5] Restauração do '$database' concluída!"
+            log "INFO" "      ⏱️  Fim da restauração: $(date '+%Y-%m-%d %H:%M:%S')"
+            log "INFO" "      🕐 Duração da restauração: ${duration}s"
             return 0
         else
-            log "ERROR" "   ❌ Falha na restauração do '$database'"
+            log "ERROR" "   ❌ [ETAPA 4/5] Falha na restauração do '$database'"
             if [[ -f "/tmp/mysql_restore_error_${database}.log" ]]; then
-                log "ERROR" "   Erro: $(cat /tmp/mysql_restore_error_${database}.log)"
+                log "ERROR" "      📋 Erro detalhado: $(cat /tmp/mysql_restore_error_${database}.log)"
             fi
             return 1
         fi
     else
+        log "INFO" "      📄 Aplicando backup não comprimido..."
         if eval "$restore_cmd" < "$backup_file" 2>/tmp/mysql_restore_error_${database}.log; then
             local end_time=$(date +%s)
             local duration=$((end_time - start_time))
-            log "SUCCESS" "   ✅ Restauração do '$database' concluída (${duration}s)"
+            log "SUCCESS" "   ✅ [ETAPA 4/5] Restauração do '$database' concluída!"
+            log "INFO" "      ⏱️  Fim da restauração: $(date '+%Y-%m-%d %H:%M:%S')"
+            log "INFO" "      🕐 Duração da restauração: ${duration}s"
             return 0
         else
-            log "ERROR" "   ❌ Falha na restauração do '$database'"
+            log "ERROR" "   ❌ [ETAPA 4/5] Falha na restauração do '$database'"
             if [[ -f "/tmp/mysql_restore_error_${database}.log" ]]; then
-                log "ERROR" "   Erro: $(cat /tmp/mysql_restore_error_${database}.log)"
+                log "ERROR" "      📋 Erro detalhado: $(cat /tmp/mysql_restore_error_${database}.log)"
             fi
             return 1
         fi

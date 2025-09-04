@@ -56,8 +56,6 @@ validate_environment() {
     local required_vars=(
         "SOURCE_HOST"
         "SOURCE_PORT" 
-        "DEST_HOST"
-        "DEST_PORT"
         "DB_USERNAME"
         "DB_PASSWORD"
         "DATABASES"
@@ -95,13 +93,17 @@ test_connectivity() {
         exit 1
     fi
     
-    # Teste servidor de destino
-    log "INFO" "Testando conexão com servidor de destino: ${DEST_HOST}:${DEST_PORT}"
-    if timeout ${DB_TIMEOUT:-30} mysql -h"$DEST_HOST" -P"$DEST_PORT" -u"$DB_USERNAME" -p"$DB_PASSWORD" -e "SELECT 1;" >/dev/null 2>&1; then
-        log "SUCCESS" "✅ Conexão com servidor de destino bem-sucedida"
+    # Teste servidor de destino (somente se configurado)
+    if [[ -n "${DEST_HOST}" && "${DEST_HOST}" != "" ]]; then
+        log "INFO" "Testando conexão com servidor de destino: ${DEST_HOST}:${DEST_PORT}"
+        if timeout ${DB_TIMEOUT:-30} mysql -h"$DEST_HOST" -P"$DEST_PORT" -u"$DB_USERNAME" -p"$DB_PASSWORD" -e "SELECT 1;" >/dev/null 2>&1; then
+            log "SUCCESS" "✅ Conexão com servidor de destino bem-sucedida"
+        else
+            log "ERROR" "❌ Falha na conexão com servidor de destino"
+            exit 1
+        fi
     else
-        log "ERROR" "❌ Falha na conexão com servidor de destino"
-        exit 1
+        log "INFO" "ℹ️  DEST_HOST não configurado - modo somente backup"
     fi
 }
 
@@ -182,7 +184,13 @@ show_system_info() {
     log "INFO" "   Usuário: $(whoami)"
     log "INFO" "   Timezone: ${TZ:-UTC}"
     log "INFO" "   Servidor origem: ${SOURCE_HOST}:${SOURCE_PORT}"
-    log "INFO" "   Servidor destino: ${DEST_HOST}:${DEST_PORT}"
+    if [[ -n "${DEST_HOST}" && "${DEST_HOST}" != "" ]]; then
+        log "INFO" "   Servidor destino: ${DEST_HOST}:${DEST_PORT}"
+        log "INFO" "   Modo: Backup + Restauração"
+    else
+        log "INFO" "   Servidor destino: Não configurado"
+        log "INFO" "   Modo: Somente Backup"
+    fi
     log "INFO" "   Databases: ${DATABASES}"
     log "INFO" "   Retenção: ${RETENTION_DAYS:-7} dias"
     log "INFO" "   Compressão: ${BACKUP_COMPRESSION:-true}"
