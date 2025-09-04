@@ -220,24 +220,30 @@ main() {
                 /scripts/backup.sh
             fi
             
-            log "INFO" "⏰ Iniciando monitoramento de agendamento..."
+            log "INFO" "⏰ Iniciando daemon cron..."
             
-            # Loop principal para verificar horário
+            # Iniciar o cron em background
+            crond -f -d 0 &
+            local cron_pid=$!
+            
+            log "SUCCESS" "✅ Daemon cron iniciado com PID $cron_pid"
+            log "INFO" "📅 Próximo backup agendado para: ${BACKUP_TIME:-0 2 * * *}"
+            
+            # Loop principal para manter o container vivo e monitorar cron
             while true; do
-                current_hour=$(date +%H)
+                # Verificar se o cron ainda está rodando
+                if ! kill -0 $cron_pid 2>/dev/null; then
+                    log "ERROR" "❌ Daemon cron parou! Reiniciando..."
+                    crond -f -d 0 &
+                    cron_pid=$!
+                    log "SUCCESS" "✅ Daemon cron reiniciado com PID $cron_pid"
+                fi
+                
+                # Log de monitoramento a cada 5 minutos
                 current_minute=$(date +%M)
-                
-                # Extrair hora e minuto do BACKUP_TIME (formato: "min hora * * *")
-                backup_minute=$(echo "${BACKUP_TIME:-0 18 * * *}" | awk '{print $1}')
-                backup_hour=$(echo "${BACKUP_TIME:-0 18 * * *}" | awk '{print $2}')
-                
-                # Verificar se é o horário de backup configurado
-                if [[ "$current_hour" == "$backup_hour" && "$current_minute" == "$backup_minute" ]]; then
-                    log "INFO" "🔔 Horário de backup atingido! Executando backup..."
-                    /scripts/backup.sh >> /logs/backup.log 2>&1 &
-                    
-                    # Aguardar até próximo minuto para evitar execução dupla
-                    sleep 60
+                if [[ $((10#$current_minute % 5)) -eq 0 && $current_minute != $last_log_minute ]]; then
+                    log "INFO" "⏰ Sistema ativo - próximo backup: $(date -d "$(echo "${BACKUP_TIME:-0 2 * * *}" | awk '{print $2":"$1}')" +%H:%M) $(date +%d/%m/%Y)"
+                    last_log_minute=$current_minute
                 fi
                 
                 # Verificar a cada 30 segundos
