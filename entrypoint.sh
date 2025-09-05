@@ -84,27 +84,41 @@ validate_environment() {
 test_connectivity() {
     log "INFO" "🔗 Testando conectividade com servidores de banco de dados..."
     
+    # Criar arquivo de configuração temporário para testes
+    local mysql_config="/tmp/mysql_test_config.cnf"
+    cat > "$mysql_config" << EOF
+[client]
+connect-timeout = ${DB_TIMEOUT:-30}
+net-read-timeout = ${NET_READ_TIMEOUT:-600}
+net-write-timeout = ${NET_WRITE_TIMEOUT:-600}
+EOF
+    
     # Teste servidor de origem
     log "INFO" "Testando conexão com servidor de origem: ${SOURCE_HOST}:${SOURCE_PORT}"
-    if timeout ${DB_TIMEOUT:-30} mysql -h"$SOURCE_HOST" -P"$SOURCE_PORT" -u"$DB_USERNAME" -p"$DB_PASSWORD" -e "SELECT 1;" >/dev/null 2>&1; then
+    if timeout ${DB_TIMEOUT:-30} mysql --defaults-extra-file="$mysql_config" -h"$SOURCE_HOST" -P"$SOURCE_PORT" -u"$DB_USERNAME" -p"$DB_PASSWORD" -e "SELECT 1;" >/dev/null 2>&1; then
         log "SUCCESS" "✅ Conexão com servidor de origem bem-sucedida"
     else
         log "ERROR" "❌ Falha na conexão com servidor de origem"
+        rm -f "$mysql_config"
         exit 1
     fi
     
     # Teste servidor de destino (somente se configurado)
     if [[ -n "${DEST_HOST}" && "${DEST_HOST}" != "" ]]; then
         log "INFO" "Testando conexão com servidor de destino: ${DEST_HOST}:${DEST_PORT}"
-        if timeout ${DB_TIMEOUT:-30} mysql -h"$DEST_HOST" -P"$DEST_PORT" -u"$DB_USERNAME" -p"$DB_PASSWORD" -e "SELECT 1;" >/dev/null 2>&1; then
+        if timeout ${DB_TIMEOUT:-30} mysql --defaults-extra-file="$mysql_config" -h"$DEST_HOST" -P"$DEST_PORT" -u"$DB_USERNAME" -p"$DB_PASSWORD" -e "SELECT 1;" >/dev/null 2>&1; then
             log "SUCCESS" "✅ Conexão com servidor de destino bem-sucedida"
         else
             log "ERROR" "❌ Falha na conexão com servidor de destino"
+            rm -f "$mysql_config"
             exit 1
         fi
     else
         log "INFO" "ℹ️  DEST_HOST não configurado - modo somente backup"
     fi
+    
+    # Limpar arquivo de configuração temporário
+    rm -f "$mysql_config"
 }
 
 # Função para configurar o cron
