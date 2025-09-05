@@ -273,13 +273,26 @@ main() {
             exec /scripts/list_backups.sh
             ;;
             
+        "optimize")
+            log "INFO" "🔧 Executando análise de otimização"
+            local target_db="${2:-$DATABASES}"
+            exec /scripts/optimize_large_db.sh "$target_db"
+            ;;
+            
+        "monitor")
+            log "INFO" "📡 Iniciando monitoramento de backup"
+            local target_db="${2:-$DATABASES}"
+            local max_time="${3:-21600}"
+            exec /scripts/monitor_backup.sh "$target_db" "$max_time"
+            ;;
+        
         "healthcheck")
             exec /scripts/healthcheck.sh
             ;;
             
         *)
             log "ERROR" "❌ Modo inválido: $mode"
-            log "INFO" "Modos disponíveis: cron, backup, test, shell, list, healthcheck"
+            log "INFO" "Modos disponíveis: cron, backup, test, shell, list, optimize, monitor, healthcheck"
             exit 1
             ;;
     esac

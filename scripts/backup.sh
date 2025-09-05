@@ -87,10 +87,12 @@ get_database_size() {
         --skip-column-names --batch 2>/dev/null || echo "0.0"
 }
 
-# Função para fazer backup de um database
+# Função para fazer backup de um database com retry automático
 backup_database() {
     local database=$1
     local backup_file="/backups/${BACKUP_PREFIX:-backup}_${database}_${BACKUP_DATE}.sql"
+    local max_retries=${MAX_RETRY_ATTEMPTS:-3}
+    local retry_interval=${RETRY_INTERVAL:-5}
     
     log "INFO" "📦 Iniciando backup do database '$database'..."
     log "INFO" "   🚀 [ETAPA 1/5] Iniciando extração de dados (mysqldump)..."
@@ -106,20 +108,79 @@ backup_database() {
     local db_size=$(get_database_size "$database" "$SOURCE_HOST" "$SOURCE_PORT")
     log "INFO" "   Tamanho do database: ${db_size} MB"
     
-    # Executar mysqldump
+    # Determinar se é uma base grande (>50GB) e aplicar configurações específicas
+    local is_large_db=false
+    if [[ $(echo "$db_size > 50000" | bc -l 2>/dev/null || echo "0") -eq 1 ]]; then
+        is_large_db=true
+        log "INFO" "   ⚡ Database grande detectado (>${db_size} MB) - aplicando configurações otimizadas"
+    fi
+    
+    # Montar comando mysqldump otimizado
     local dump_cmd="mysqldump -h'$SOURCE_HOST' -P'$SOURCE_PORT' -u'$DB_USERNAME' -p'$DB_PASSWORD'"
     
-    # Adicionar opções personalizadas
+    # Adicionar configurações específicas para timeouts e reconexão
+    dump_cmd="$dump_cmd --connect-timeout=${DB_TIMEOUT:-300}"
+    dump_cmd="$dump_cmd --net-read-timeout=${NET_READ_TIMEOUT:-7200}"
+    dump_cmd="$dump_cmd --net-write-timeout=${NET_WRITE_TIMEOUT:-7200}"
+    dump_cmd="$dump_cmd --max-allowed-packet=${MAX_ALLOWED_PACKET:-1G}"
+    
+    # Para databases grandes, aplicar configurações especiais
+    if [[ "$is_large_db" == true ]]; then
+        dump_cmd="$dump_cmd --quick"
+        dump_cmd="$dump_cmd --lock-tables=false"
+        dump_cmd="$dump_cmd --single-transaction"
+        dump_cmd="$dump_cmd --set-gtid-purged=OFF"
+        dump_cmd="$dump_cmd --column-statistics=0"
+        dump_cmd="$dump_cmd --disable-keys"
+        dump_cmd="$dump_cmd --extended-insert=false"
+        log "INFO" "   🔧 Configurações para database grande aplicadas"
+    fi
+    
+    # Adicionar opções personalizadas do usuário
     if [[ -n "${MYSQLDUMP_OPTIONS}" ]]; then
         dump_cmd="$dump_cmd ${MYSQLDUMP_OPTIONS}"
     fi
     
     dump_cmd="$dump_cmd '$database'"
     
-    # Executar backup
+    # Executar backup com sistema de retry
     local start_time=$(date +%s)
+    local attempt=1
+    local success=false
     
-    if eval "$dump_cmd" > "$backup_file" 2>/tmp/mysqldump_error_${database}.log; then
+    while [[ $attempt -le $max_retries ]] && [[ "$success" == false ]]; do
+        if [[ $attempt -gt 1 ]]; then
+            log "WARNING" "   ⚠️  Tentativa ${attempt}/${max_retries} para backup do '$database'"
+            sleep $retry_interval
+        fi
+        
+        log "INFO" "   ⏳ Executando mysqldump (tentativa $attempt)..."
+        
+        if timeout ${MYSQLDUMP_TIMEOUT:-21600} bash -c "$dump_cmd" > "$backup_file" 2>/tmp/mysqldump_error_${database}.log; then
+            success=true
+        else
+            local error_msg=$(cat /tmp/mysqldump_error_${database}.log 2>/dev/null || echo "Erro desconhecido")
+            log "ERROR" "❌ Tentativa $attempt falhou: $error_msg"
+            
+            # Verificar se é erro de conexão que pode ser resolvido com retry
+            if echo "$error_msg" | grep -iE "lost connection|timeout|connection reset|can't connect|server has gone away"; then
+                if [[ $attempt -lt $max_retries ]]; then
+                    log "INFO" "   🔄 Erro de conexão detectado - tentando novamente em ${retry_interval}s"
+                    ((attempt++))
+                    continue
+                else
+                    log "ERROR" "   ❌ Todas as tentativas de conexão falharam para '$database'"
+                fi
+            else
+                log "ERROR" "   ❌ Erro não recuperável detectado - abortando backup do '$database'"
+                break
+            fi
+        fi
+        
+        ((attempt++))
+    done
+    
+    if [[ "$success" == true ]]; then
         local end_time=$(date +%s)
         local duration=$((end_time - start_time))
         
