@@ -12,10 +12,13 @@ MYSQLDUMP_OPTIONS=--routines --triggers --single-transaction --add-drop-database
 MYSQLDUMP_OPTIONS=--complete-insert --extended-insert
 
 # Para databases grandes (> 5GB) - RECOMENDADO
-MYSQLDUMP_OPTIONS=--routines --triggers --single-transaction --add-drop-database --default-character-set=utf8mb4 --max_allowed_packet=1G --net_read_timeout=600 --net_write_timeout=600
+MYSQLDUMP_OPTIONS=--routines --triggers --single-transaction --add-drop-database --default-character-set=utf8mb4 --ssl=0
 
 # Para databases muito grandes (> 20GB)
-MYSQLDUMP_OPTIONS=--single-transaction --quick --hex-blob --max_allowed_packet=2G --net_read_timeout=1200 --net_write_timeout=1200
+MYSQLDUMP_OPTIONS=--single-transaction --quick --hex-blob --ssl=0
+
+# Opções adicionais do cliente MySQL (para conectividade)
+MYSQL_CLIENT_OPTIONS=--ssl=0
 ```
 
 ### ⏱️ Configurações de Timeout para Databases Grandes

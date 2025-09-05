@@ -66,21 +66,11 @@ database_exists() {
     local host=$2
     local port=$3
     
-    # Criar arquivo de configuração temporário para timeouts
-    local mysql_config="/tmp/mysql_config_check_${database}.cnf"
-    cat > "$mysql_config" << EOF
-[client]
-connect-timeout = ${DB_TIMEOUT:-30}
-net-read-timeout = ${NET_READ_TIMEOUT:-600}
-net-write-timeout = ${NET_WRITE_TIMEOUT:-600}
-EOF
-    
-    if mysql --defaults-extra-file="$mysql_config" -h"$host" -P"$port" -u"$DB_USERNAME" -p"$DB_PASSWORD" \
+    # Usar MYSQL_CLIENT_OPTIONS se disponível
+    if mysql ${MYSQL_CLIENT_OPTIONS} -h"$host" -P"$port" -u"$DB_USERNAME" -p"$DB_PASSWORD" \
         -e "USE $database;" >/dev/null 2>&1; then
-        rm -f "$mysql_config"
         return 0
     else
-        rm -f "$mysql_config"
         return 1
     fi
 }
@@ -91,22 +81,12 @@ get_database_size() {
     local host=$2
     local port=$3
     
-    # Criar arquivo de configuração temporário para timeouts
-    local mysql_config="/tmp/mysql_config_size_${database}.cnf"
-    cat > "$mysql_config" << EOF
-[client]
-connect-timeout = ${DB_TIMEOUT:-30}
-net-read-timeout = ${NET_READ_TIMEOUT:-600}
-net-write-timeout = ${NET_WRITE_TIMEOUT:-600}
-EOF
-    
-    local size=$(mysql --defaults-extra-file="$mysql_config" -h"$host" -P"$port" -u"$DB_USERNAME" -p"$DB_PASSWORD" \
+    local size=$(mysql ${MYSQL_CLIENT_OPTIONS} -h"$host" -P"$port" -u"$DB_USERNAME" -p"$DB_PASSWORD" \
         -e "SELECT ROUND(SUM(data_length + index_length) / 1024 / 1024, 1) AS 'DB Size in MB' 
             FROM information_schema.tables 
             WHERE table_schema='$database';" \
         --skip-column-names --batch 2>/dev/null || echo "0.0")
     
-    rm -f "$mysql_config"
     echo "$size"
 }
 
@@ -139,32 +119,10 @@ backup_database() {
     fi
     
     # Montar comando mysqldump otimizado
-    local dump_cmd="mysqldump --defaults-extra-file='$mysql_config' -h'$SOURCE_HOST' -P'$SOURCE_PORT' -u'$DB_USERNAME' -p'$DB_PASSWORD'"
+    local dump_cmd="mysqldump ${MYSQL_CLIENT_OPTIONS} -h'$SOURCE_HOST' -P'$SOURCE_PORT' -u'$DB_USERNAME' -p'$DB_PASSWORD'"
     
-    # Criar arquivo de configuração temporário para timeouts
-    local mysql_config="/tmp/mysql_timeout_config_${database}.cnf"
-    cat > "$mysql_config" << EOF
-[client]
-connect-timeout = ${DB_TIMEOUT:-300}
-net-read-timeout = ${NET_READ_TIMEOUT:-7200}
-net-write-timeout = ${NET_WRITE_TIMEOUT:-7200}
-max-allowed-packet = ${MAX_ALLOWED_PACKET:-1G}
-
-[mysql]
-connect-timeout = ${DB_TIMEOUT:-300}
-net-read-timeout = ${NET_READ_TIMEOUT:-7200}
-net-write-timeout = ${NET_WRITE_TIMEOUT:-7200}
-max-allowed-packet = ${MAX_ALLOWED_PACKET:-1G}
-
-[mysqldump]
-connect-timeout = ${DB_TIMEOUT:-300}
-net-read-timeout = ${NET_READ_TIMEOUT:-7200}
-net-write-timeout = ${NET_WRITE_TIMEOUT:-7200}
-max-allowed-packet = ${MAX_ALLOWED_PACKET:-1G}
-EOF
-    
-    # Usar arquivo de configuração
-    dump_cmd="$dump_cmd --defaults-extra-file='$mysql_config'"
+    # Montar comando mysqldump otimizado
+    local dump_cmd="mysqldump ${MYSQL_CLIENT_OPTIONS} -h'$SOURCE_HOST' -P'$SOURCE_PORT' -u'$DB_USERNAME' -p'$DB_PASSWORD'"
     
     # Para databases grandes, aplicar configurações especiais
     if [[ "$is_large_db" == true ]]; then
@@ -212,13 +170,9 @@ EOF
                     continue
                 else
                     log "ERROR" "   ❌ Todas as tentativas de conexão falharam para '$database'"
-                    # Limpar arquivo de configuração temporário
-                    [[ -f "$mysql_config" ]] && rm -f "$mysql_config"
                 fi
             else
                 log "ERROR" "   ❌ Erro não recuperável detectado - abortando backup do '$database'"
-                # Limpar arquivo de configuração temporário
-                [[ -f "$mysql_config" ]] && rm -f "$mysql_config"
                 break
             fi
         fi
@@ -292,8 +246,6 @@ EOF
             fi
             
             ((SUCCESSFUL_BACKUPS++))
-            # Limpar arquivo de configuração temporário
-            [[ -f "$mysql_config" ]] && rm -f "$mysql_config"
             return 0
         else
             log "ERROR" "❌ Arquivo de backup vazio ou não foi criado"
@@ -301,8 +253,6 @@ EOF
                 log "ERROR" "   Erro do mysqldump: $(cat /tmp/mysqldump_error_${database}.log)"
             fi
             ((FAILED_BACKUPS++))
-            # Limpar arquivo de configuração temporário
-            [[ -f "$mysql_config" ]] && rm -f "$mysql_config"
             return 1
         fi
     else
@@ -311,8 +261,6 @@ EOF
             log "ERROR" "   Erro: $(cat /tmp/mysqldump_error_${database}.log)"
         fi
         ((FAILED_BACKUPS++))
-        # Limpar arquivo de configuração temporário
-        [[ -f "$mysql_config" ]] && rm -f "$mysql_config"
         return 1
     fi
 }
@@ -362,29 +310,18 @@ restore_to_destination() {
     log "INFO" "      👤 Usuário: ${DB_USERNAME}"
     log "INFO" "      📁 Database: ${database}"
     
-    # Criar arquivo de configuração temporário para restauração
-    local mysql_restore_config="/tmp/mysql_restore_config_${database}.cnf"
-    cat > "$mysql_restore_config" << EOF
-[client]
-connect-timeout = ${DB_TIMEOUT:-300}
-net-read-timeout = ${NET_READ_TIMEOUT:-7200}
-net-write-timeout = ${NET_WRITE_TIMEOUT:-7200}
-max-allowed-packet = ${MAX_ALLOWED_PACKET:-1G}
-EOF
-    
     # Verificar se o banco existe no destino e criá-lo se necessário
     log "INFO" "      🔍 Verificando se o banco '$database' existe no destino..."
-    local check_db_cmd="mysql --defaults-extra-file='$mysql_restore_config' -h'$DEST_HOST' -P'$DEST_PORT' -u'$DB_USERNAME' -p'$DB_PASSWORD' -e 'SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME=\"$database\";'"
+    local check_db_cmd="mysql ${MYSQL_CLIENT_OPTIONS} -h'$DEST_HOST' -P'$DEST_PORT' -u'$DB_USERNAME' -p'$DB_PASSWORD' -e 'SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME=\"$database\";'"
     
     if ! eval "$check_db_cmd" 2>/dev/null | grep -q "$database"; then
         log "INFO" "      🏗️  Banco '$database' não existe. Criando..."
-        local create_db_cmd="mysql --defaults-extra-file='$mysql_restore_config' -h'$DEST_HOST' -P'$DEST_PORT' -u'$DB_USERNAME' -p'$DB_PASSWORD' -e 'CREATE DATABASE IF NOT EXISTS \`$database\`;'"
+        local create_db_cmd="mysql ${MYSQL_CLIENT_OPTIONS} -h'$DEST_HOST' -P'$DEST_PORT' -u'$DB_USERNAME' -p'$DB_PASSWORD' -e 'CREATE DATABASE IF NOT EXISTS \`$database\`;'"
         if ! eval "$create_db_cmd" 2>/tmp/mysql_create_error_${database}.log; then
             log "ERROR" "   ❌ Falha ao criar banco '$database' no destino"
             if [[ -f "/tmp/mysql_create_error_${database}.log" ]]; then
                 log "ERROR" "      📋 Erro detalhado: $(cat /tmp/mysql_create_error_${database}.log)"
             fi
-            rm -f "$mysql_restore_config"
             return 1
         fi
         log "SUCCESS" "      ✅ Banco '$database' criado com sucesso no destino"
@@ -393,7 +330,7 @@ EOF
     fi
     
     # Preparar comando de restauração
-    local restore_cmd="mysql --defaults-extra-file='$mysql_restore_config' -h'$DEST_HOST' -P'$DEST_PORT' -u'$DB_USERNAME' -p'$DB_PASSWORD' -f"
+    local restore_cmd="mysql ${MYSQL_CLIENT_OPTIONS} -h'$DEST_HOST' -P'$DEST_PORT' -u'$DB_USERNAME' -p'$DB_PASSWORD' -f"
     
     # Executar restauração
     local start_time=$(date +%s)
@@ -407,16 +344,12 @@ EOF
             log "SUCCESS" "   ✅ [ETAPA 4/5] Restauração do '$database' concluída!"
             log "INFO" "      ⏱️  Fim da restauração: $(date '+%Y-%m-%d %H:%M:%S')"
             log "INFO" "      🕐 Duração da restauração: ${duration}s"
-            # Limpar arquivo de configuração temporário
-            rm -f "$mysql_restore_config"
             return 0
         else
             log "ERROR" "   ❌ [ETAPA 4/5] Falha na restauração do '$database'"
             if [[ -f "/tmp/mysql_restore_error_${database}.log" ]]; then
                 log "ERROR" "      📋 Erro detalhado: $(cat /tmp/mysql_restore_error_${database}.log)"
             fi
-            # Limpar arquivo de configuração temporário
-            rm -f "$mysql_restore_config"
             return 1
         fi
     else
@@ -427,16 +360,12 @@ EOF
             log "SUCCESS" "   ✅ [ETAPA 4/5] Restauração do '$database' concluída!"
             log "INFO" "      ⏱️  Fim da restauração: $(date '+%Y-%m-%d %H:%M:%S')"
             log "INFO" "      🕐 Duração da restauração: ${duration}s"
-            # Limpar arquivo de configuração temporário
-            rm -f "$mysql_restore_config"
             return 0
         else
             log "ERROR" "   ❌ [ETAPA 4/5] Falha na restauração do '$database'"
             if [[ -f "/tmp/mysql_restore_error_${database}.log" ]]; then
                 log "ERROR" "      📋 Erro detalhado: $(cat /tmp/mysql_restore_error_${database}.log)"
             fi
-            # Limpar arquivo de configuração temporário
-            rm -f "$mysql_restore_config"
             return 1
         fi
     fi

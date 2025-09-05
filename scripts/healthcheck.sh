@@ -40,7 +40,7 @@ check_database_connectivity() {
     
     # Verificar servidor de origem
     if [[ -n "$SOURCE_HOST" && -n "$SOURCE_PORT" && -n "$DB_USERNAME" && -n "$DB_PASSWORD" ]]; then
-        if timeout 10 mysql -h"$SOURCE_HOST" -P"$SOURCE_PORT" -u"$DB_USERNAME" -p"$DB_PASSWORD" -e "SELECT 1;" >/dev/null 2>&1; then
+        if timeout 10 mysql ${MYSQL_CLIENT_OPTIONS} -h"$SOURCE_HOST" -P"$SOURCE_PORT" -u"$DB_USERNAME" -p"$DB_PASSWORD" -e "SELECT 1;" >/dev/null 2>&1; then
             log "SUCCESS" "✅ Conectividade com servidor de origem OK"
         else
             log "ERROR" "❌ Falha na conectividade com servidor de origem"
@@ -53,7 +53,7 @@ check_database_connectivity() {
     
     # Verificar servidor de destino
     if [[ -n "$DEST_HOST" && -n "$DEST_PORT" && -n "$DB_USERNAME" && -n "$DB_PASSWORD" ]]; then
-        if timeout 10 mysql -h"$DEST_HOST" -P"$DEST_PORT" -u"$DB_USERNAME" -p"$DB_PASSWORD" -e "SELECT 1;" >/dev/null 2>&1; then
+        if timeout 10 mysql ${MYSQL_CLIENT_OPTIONS} -h"$DEST_HOST" -P"$DEST_PORT" -u"$DB_USERNAME" -p"$DB_PASSWORD" -e "SELECT 1;" >/dev/null 2>&1; then
             log "SUCCESS" "✅ Conectividade com servidor de destino OK"
         else
             log "ERROR" "❌ Falha na conectividade com servidor de destino"

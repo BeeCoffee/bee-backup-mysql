@@ -72,7 +72,7 @@ list_databases() {
     log "INFO" "📋 Listando databases disponíveis no servidor de origem..."
     
     # Verificar conectividade
-    if ! mysql -h"$SOURCE_HOST" -P"$SOURCE_PORT" -u"$DB_USERNAME" -p"$DB_PASSWORD" -e "SELECT 1;" >/dev/null 2>&1; then
+    if ! mysql ${MYSQL_CLIENT_OPTIONS} -h"$SOURCE_HOST" -P"$SOURCE_PORT" -u"$DB_USERNAME" -p"$DB_PASSWORD" -e "SELECT 1;" >/dev/null 2>&1; then
         log "ERROR" "❌ Falha na conexão com servidor de origem"
         exit 1
     fi
@@ -83,7 +83,7 @@ list_databases() {
     log "INFO" "=========================="
     
     # Obter lista de databases
-    local databases=$(mysql -h"$SOURCE_HOST" -P"$SOURCE_PORT" -u"$DB_USERNAME" -p"$DB_PASSWORD" \
+    local databases=$(mysql ${MYSQL_CLIENT_OPTIONS} -h"$SOURCE_HOST" -P"$SOURCE_PORT" -u"$DB_USERNAME" -p"$DB_PASSWORD" \
         -e "SHOW DATABASES;" --skip-column-names --batch 2>/dev/null | \
         grep -vE '^(information_schema|performance_schema|mysql|sys)$' || true)
     
@@ -94,7 +94,7 @@ list_databases() {
                 ((count++))
                 
                 # Obter tamanho do database
-                local size=$(mysql -h"$SOURCE_HOST" -P"$SOURCE_PORT" -u"$DB_USERNAME" -p"$DB_PASSWORD" \
+                local size=$(mysql ${MYSQL_CLIENT_OPTIONS} -h"$SOURCE_HOST" -P"$SOURCE_PORT" -u"$DB_USERNAME" -p"$DB_PASSWORD" \
                     -e "SELECT ROUND(SUM(data_length + index_length) / 1024 / 1024, 1) AS 'DB Size in MB' 
                         FROM information_schema.tables 
                         WHERE table_schema='$db';" \
@@ -178,7 +178,7 @@ validate_databases() {
         if [[ -n "$db" ]]; then
             log "INFO" "   Verificando '$db'..."
             
-            if mysql -h"$SOURCE_HOST" -P"$SOURCE_PORT" -u"$DB_USERNAME" -p"$DB_PASSWORD" \
+            if mysql ${MYSQL_CLIENT_OPTIONS} -h"$SOURCE_HOST" -P"$SOURCE_PORT" -u"$DB_USERNAME" -p"$DB_PASSWORD" \
                 -e "USE $db;" >/dev/null 2>&1; then
                 log "SUCCESS" "   ✅ '$db' existe e está acessível"
             else

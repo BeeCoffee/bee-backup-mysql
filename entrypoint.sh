@@ -89,13 +89,11 @@ test_connectivity() {
     cat > "$mysql_config" << EOF
 [client]
 connect-timeout = ${DB_TIMEOUT:-30}
-net-read-timeout = ${NET_READ_TIMEOUT:-600}
-net-write-timeout = ${NET_WRITE_TIMEOUT:-600}
 EOF
     
     # Teste servidor de origem
     log "INFO" "Testando conexão com servidor de origem: ${SOURCE_HOST}:${SOURCE_PORT}"
-    if timeout ${DB_TIMEOUT:-30} mysql --defaults-extra-file="$mysql_config" -h"$SOURCE_HOST" -P"$SOURCE_PORT" -u"$DB_USERNAME" -p"$DB_PASSWORD" -e "SELECT 1;" >/dev/null 2>&1; then
+    if timeout ${DB_TIMEOUT:-30} mysql --defaults-extra-file="$mysql_config" ${MYSQL_CLIENT_OPTIONS} -h"$SOURCE_HOST" -P"$SOURCE_PORT" -u"$DB_USERNAME" -p"$DB_PASSWORD" -e "SELECT 1;" >/dev/null 2>&1; then
         log "SUCCESS" "✅ Conexão com servidor de origem bem-sucedida"
     else
         log "ERROR" "❌ Falha na conexão com servidor de origem"
@@ -106,7 +104,7 @@ EOF
     # Teste servidor de destino (somente se configurado)
     if [[ -n "${DEST_HOST}" && "${DEST_HOST}" != "" ]]; then
         log "INFO" "Testando conexão com servidor de destino: ${DEST_HOST}:${DEST_PORT}"
-        if timeout ${DB_TIMEOUT:-30} mysql --defaults-extra-file="$mysql_config" -h"$DEST_HOST" -P"$DEST_PORT" -u"$DB_USERNAME" -p"$DB_PASSWORD" -e "SELECT 1;" >/dev/null 2>&1; then
+        if timeout ${DB_TIMEOUT:-30} mysql --defaults-extra-file="$mysql_config" ${MYSQL_CLIENT_OPTIONS} -h"$DEST_HOST" -P"$DEST_PORT" -u"$DB_USERNAME" -p"$DB_PASSWORD" -e "SELECT 1;" >/dev/null 2>&1; then
             log "SUCCESS" "✅ Conexão com servidor de destino bem-sucedida"
         else
             log "ERROR" "❌ Falha na conexão com servidor de destino"

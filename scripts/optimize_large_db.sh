@@ -58,7 +58,7 @@ analyze_database() {
     "
     
     log "INFO" "   📊 Estatísticas gerais:"
-    mysql -h"$host" -P"$port" -u"$DB_USERNAME" -p"$DB_PASSWORD" \
+    mysql ${MYSQL_CLIENT_OPTIONS} -h"$host" -P"$port" -u"$DB_USERNAME" -p"$DB_PASSWORD" \
         -e "$query" 2>/dev/null || log "ERROR" "Falha ao obter estatísticas"
     
     # Identificar tabelas grandes
@@ -75,7 +75,7 @@ analyze_database() {
     "
     
     log "INFO" "   📋 Top 10 tabelas com mais registros:"
-    mysql -h"$host" -P"$port" -u"$DB_USERNAME" -p"$DB_PASSWORD" \
+    mysql ${MYSQL_CLIENT_OPTIONS} -h"$host" -P"$port" -u"$DB_USERNAME" -p"$DB_PASSWORD" \
         -e "$large_tables_query" 2>/dev/null || log "ERROR" "Falha ao obter tabelas grandes"
 }
 
@@ -99,7 +99,7 @@ check_mysql_config() {
     );
     "
     
-    mysql -h"$host" -P"$port" -u"$DB_USERNAME" -p"$DB_PASSWORD" \
+    mysql ${MYSQL_CLIENT_OPTIONS} -h"$host" -P"$port" -u"$DB_USERNAME" -p"$DB_PASSWORD" \
         -e "$config_query" 2>/dev/null || log "ERROR" "Falha ao verificar configurações"
 }
 
@@ -203,7 +203,7 @@ main() {
     fi
     
     # Obter tamanho do database
-    local db_size=$(mysql -h"$SOURCE_HOST" -P"$SOURCE_PORT" -u"$DB_USERNAME" -p"$DB_PASSWORD" \
+    local db_size=$(mysql ${MYSQL_CLIENT_OPTIONS} -h"$SOURCE_HOST" -P"$SOURCE_PORT" -u"$DB_USERNAME" -p"$DB_PASSWORD" \
         -e "SELECT ROUND(SUM(data_length + index_length) / 1024 / 1024, 1) AS 'DB Size in MB' 
             FROM information_schema.tables 
             WHERE table_schema='$database';" \
