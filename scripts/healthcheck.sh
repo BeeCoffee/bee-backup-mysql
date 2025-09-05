@@ -212,7 +212,7 @@ show_system_stats() {
     
     # Informações básicas
     log "INFO" "🖥️  Hostname: $(hostname)"
-    log "INFO" "👤 Usuário: $(whoami)"
+    log "INFO" "👤 Usuário: ${DB_USERNAME}"
     log "INFO" "⏰ Uptime: $(uptime | cut -d',' -f1)"
     log "INFO" "🕐 Timezone: ${TZ:-UTC}"
     

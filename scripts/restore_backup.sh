@@ -355,7 +355,7 @@ main() {
     log "INFO" "🔄 INICIANDO RESTAURAÇÃO DE BACKUP"
     log "INFO" "=================================="
     log "INFO" "📅 Data/Hora: $(date '+%Y-%m-%d %H:%M:%S')"
-    log "INFO" "👤 Usuário: $(whoami)"
+    log "INFO" "👤 Usuário: ${DB_USERNAME}"
     log "INFO" "🖥️  Container: $(hostname)"
     
     # Validar argumentos
