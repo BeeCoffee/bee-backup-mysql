@@ -129,8 +129,6 @@ backup_database() {
         dump_cmd="$dump_cmd --quick"
         dump_cmd="$dump_cmd --lock-tables=false"
         dump_cmd="$dump_cmd --single-transaction"
-        dump_cmd="$dump_cmd --set-gtid-purged=OFF"
-        dump_cmd="$dump_cmd --column-statistics=0"
         dump_cmd="$dump_cmd --disable-keys"
         dump_cmd="$dump_cmd --extended-insert=false"
         log "INFO" "   🔧 Configurações para database grande aplicadas"
