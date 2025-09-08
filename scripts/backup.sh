@@ -228,15 +228,21 @@ EOF
         
         log "INFO" "      📦 Chunk $chunk_num/$total_chunks (offset: $offset)"
         
-        # Backup do chunk
-        timeout 1800 mysqldump ${MYSQL_CLIENT_OPTIONS} -h"$host" -P"$port" -u"$DB_USERNAME" -p"$DB_PASSWORD" \
-            --no-create-info --single-transaction --quick --lock-tables=false \
-            --extended-insert=false --disable-keys \
+        # Backup do chunk com configurações ZERO LOCK para produção
+        timeout ${CHUNK_TIMEOUT:-1800} mysqldump ${MYSQL_CLIENT_OPTIONS} -h"$host" -P"$port" -u"$DB_USERNAME" -p"$DB_PASSWORD" \
+            --no-create-info --single-transaction --quick \
+            --lock-tables=false --skip-lock-tables --skip-add-locks \
+            --no-tablespaces --extended-insert=false --disable-keys \
             --where="1=1 ORDER BY (SELECT NULL) LIMIT $chunk_size OFFSET $offset" \
             "$database" "$table" >> "$temp_file" 2>/dev/null
         
         if [[ $? -eq 0 ]]; then
             ((successful_chunks++))
+            
+            # Pausa pequena entre chunks para não sobrecarregar produção
+            if [[ -n "${CHUNK_INTERVAL_MS}" ]] && [[ "${CHUNK_INTERVAL_MS}" -gt 0 ]]; then
+                sleep $(echo "scale=3; ${CHUNK_INTERVAL_MS} / 1000" | bc 2>/dev/null || echo "0.1")
+            fi
         else
             log "WARNING" "         ⚠️ Chunk $chunk_num falhou"
         fi
