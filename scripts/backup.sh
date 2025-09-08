@@ -108,41 +108,70 @@ backup_database_with_chunks() {
     
     log "INFO" "   🧩 Iniciando backup híbrido (chunks + tradicional)"
     
-    # Criar estrutura do database (sem dados)
-    log "INFO" "   📋 Extraindo estrutura do database..."
-    local structure_cmd="mysqldump ${MYSQL_CLIENT_OPTIONS} -h'$SOURCE_HOST' -P'$SOURCE_PORT' -u'$DB_USERNAME' -p'$DB_PASSWORD' --no-data --routines --triggers '$database'"
+    # Preparar lista de tabelas grandes para exclusão
+    local exclude_large_tables=""
+    while IFS= read -r table_info; do
+        [[ -z "$table_info" ]] && continue
+        local table_name=$(echo "$table_info" | cut -d':' -f1)
+        exclude_large_tables="$exclude_large_tables --ignore-table=${database}.${table_name}"
+    done <<< "$large_tables"
+    
+    # Criar estrutura do database (sem dados das tabelas grandes)
+    log "INFO" "   📋 Extraindo estrutura do database (excluindo tabelas grandes)..."
+    local structure_cmd="mysqldump ${MYSQL_CLIENT_OPTIONS} -h'$SOURCE_HOST' -P'$SOURCE_PORT' -u'$DB_USERNAME' -p'$DB_PASSWORD' --no-data --routines --triggers $exclude_large_tables '$database'"
     
     if ! timeout ${MYSQLDUMP_TIMEOUT:-3600} bash -c "$structure_cmd" > "$backup_file" 2>/tmp/structure_error.log; then
         log "ERROR" "❌ Falha ao extrair estrutura do database"
-        cat /tmp/structure_error.log
+        cat /tmp/structure_error.log 2>/dev/null || echo "Sem detalhes de erro disponíveis"
         return 1
     fi
     
+    # Criar estruturas das tabelas grandes (apenas estrutura, sem dados)
+    log "INFO" "   🏗️  Criando estruturas das tabelas grandes..."
+    while IFS= read -r table_info; do
+        [[ -z "$table_info" ]] && continue
+        local table_name=$(echo "$table_info" | cut -d':' -f1)
+        log "INFO" "     📋 Estrutura da tabela '$table_name'..."
+        
+        local table_structure_cmd="mysqldump ${MYSQL_CLIENT_OPTIONS} -h'$SOURCE_HOST' -P'$SOURCE_PORT' -u'$DB_USERNAME' -p'$DB_PASSWORD' --no-data '$database' '$table_name'"
+        
+        if ! timeout ${MYSQLDUMP_TIMEOUT:-300} bash -c "$table_structure_cmd" >> "$backup_file" 2>/tmp/table_structure_error.log; then
+            log "ERROR" "❌ Falha ao extrair estrutura da tabela '$table_name'"
+            cat /tmp/table_structure_error.log 2>/dev/null
+            return 1
+        fi
+    done <<< "$large_tables"
+    
     # Fazer backup das tabelas grandes com chunks
-    echo "$large_tables" | while read -r table_info; do
-        local table_name=$(echo "$table_info" | awk '{print $1}')
+    local chunk_success=true
+    while IFS= read -r table_info; do
+        [[ -z "$table_info" ]] && continue
+        local table_name=$(echo "$table_info" | cut -d':' -f1)
         log "INFO" "   🧩 Fazendo backup com chunks da tabela '$table_name'..."
         
         if ! backup_table_chunks "$database" "$table_name" "$SOURCE_HOST" "$SOURCE_PORT"; then
             log "ERROR" "❌ Falha no backup com chunks da tabela '$table_name'"
-            return 1
+            chunk_success=false
+            break
         fi
         
         # Concatenar chunks ao arquivo principal
-        cat "/tmp/${table_name}_chunks_${BACKUP_DATE}.sql" >> "$backup_file" 2>/dev/null
-        rm -f "/tmp/${table_name}_chunks_${BACKUP_DATE}.sql"
-    done
+        if [[ -f "/tmp/${table_name}_chunks_${BACKUP_DATE}.sql" ]]; then
+            cat "/tmp/${table_name}_chunks_${BACKUP_DATE}.sql" >> "$backup_file" 2>/dev/null
+            rm -f "/tmp/${table_name}_chunks_${BACKUP_DATE}.sql"
+        fi
+    done <<< "$large_tables"
     
-    # Fazer backup tradicional das tabelas pequenas (excluindo as grandes)
-    local exclude_tables=""
-    echo "$large_tables" | while read -r table_info; do
-        local table_name=$(echo "$table_info" | awk '{print $1}')
-        exclude_tables="$exclude_tables --ignore-table=${database}.${table_name}"
-    done
+    # Verificar se houve falha nos chunks
+    if [[ "$chunk_success" != "true" ]]; then
+        log "ERROR" "❌ Falha no processamento de chunks"
+        return 1
+    fi
     
-    if [[ -n "$exclude_tables" ]]; then
+    # Fazer backup tradicional das tabelas pequenas (usando exclusão já preparada)
+    if [[ -n "$exclude_large_tables" ]]; then
         log "INFO" "   📦 Fazendo backup tradicional das tabelas pequenas..."
-        local small_tables_cmd="mysqldump ${MYSQL_CLIENT_OPTIONS} -h'$SOURCE_HOST' -P'$SOURCE_PORT' -u'$DB_USERNAME' -p'$DB_PASSWORD' --no-create-info $exclude_tables '$database'"
+        local small_tables_cmd="mysqldump ${MYSQL_CLIENT_OPTIONS} -h'$SOURCE_HOST' -P'$SOURCE_PORT' -u'$DB_USERNAME' -p'$DB_PASSWORD' --no-create-info $exclude_large_tables '$database'"
         
         timeout ${MYSQLDUMP_TIMEOUT:-3600} bash -c "$small_tables_cmd" >> "$backup_file" 2>/tmp/small_tables_error.log
     fi
