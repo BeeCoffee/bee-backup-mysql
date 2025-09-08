@@ -97,8 +97,9 @@ EOF
         log "SUCCESS" "✅ Conexão com servidor de origem bem-sucedida"
     else
         log "ERROR" "❌ Falha na conexão com servidor de origem"
+        log "WARNING" "⚠️  Continuando sem teste de conectividade - use backup manual para testar"
         rm -f "$mysql_config"
-        exit 1
+        return 1
     fi
     
     # Teste servidor de destino (somente se configurado)
@@ -223,7 +224,10 @@ main() {
     case "$mode" in
         "cron")
             log "INFO" "📋 Iniciando em modo agendado (cron)"
-            test_connectivity
+            if ! test_connectivity; then
+                log "WARNING" "⚠️  Falha no teste de conectividade, mas continuando em modo cron"
+                log "WARNING" "⚠️  Use 'docker compose exec mariadb-backup /scripts/manual_backup.sh [database]' para testar manualmente"
+            fi
             setup_cron
             
             # Executar backup inicial se configurado
