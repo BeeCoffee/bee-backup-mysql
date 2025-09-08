@@ -87,6 +87,31 @@ O Backup Bee oferece dois modos de operação que são detectados automaticament
 - **🌐 Multi-servidor**: Suporte a servidores de origem e destino diferentes
 - **⏱️ Timeouts Otimizados**: Configurações específicas para databases grandes (20GB+)
 - **📋 Logs Detalhados**: Sistema de logging em 5 etapas com rastreamento completo
+- **🧩 Chunking Automático**: Sistema inteligente para tabelas grandes (30GB-80GB)
+
+## 🏢 Configuração para Bancos Grandes (200GB+)
+
+Para databases com **200GB ou mais** e tabelas individuais de **30GB-80GB**, use nossa configuração otimizada:
+
+### 🚀 Configuração Rápida
+```bash
+# Usar template específico para bancos grandes
+cp .env.example.large .env
+
+# OU usar script de configuração interativa
+./configure_large_db.sh
+```
+
+### 📊 Performance Esperada
+- **Tempo**: 8-12 horas para 200GB
+- **Chunking**: ~400-500 chunks para tabela de 80GB
+- **Compressão**: ~70% redução de espaço
+- **Zero Locks**: Produção sem interrupção
+
+### 📖 Documentação Detalhada
+- **Guia Completo**: [`CONFIGURACAO_BANCOS_GRANDES.md`](CONFIGURACAO_BANCOS_GRANDES.md)
+- **Template Otimizado**: [`.env.example.large`](.env.example.large)
+- **Script Configuração**: [`configure_large_db.sh`](configure_large_db.sh)
 
 ## 📁 Estrutura do Projeto
 
