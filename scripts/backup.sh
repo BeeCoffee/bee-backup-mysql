@@ -100,6 +100,57 @@ detect_large_tables() {
     fi
 }
 
+# Função para backup completo de database com chunks para tabelas grandes
+backup_database_with_chunks() {
+    local database=$1
+    local backup_file=$2
+    local large_tables=$3
+    
+    log "INFO" "   🧩 Iniciando backup híbrido (chunks + tradicional)"
+    
+    # Criar estrutura do database (sem dados)
+    log "INFO" "   📋 Extraindo estrutura do database..."
+    local structure_cmd="mysqldump ${MYSQL_CLIENT_OPTIONS} -h'$SOURCE_HOST' -P'$SOURCE_PORT' -u'$DB_USERNAME' -p'$DB_PASSWORD' --no-data --routines --triggers '$database'"
+    
+    if ! timeout ${MYSQLDUMP_TIMEOUT:-3600} bash -c "$structure_cmd" > "$backup_file" 2>/tmp/structure_error.log; then
+        log "ERROR" "❌ Falha ao extrair estrutura do database"
+        cat /tmp/structure_error.log
+        return 1
+    fi
+    
+    # Fazer backup das tabelas grandes com chunks
+    echo "$large_tables" | while read -r table_info; do
+        local table_name=$(echo "$table_info" | awk '{print $1}')
+        log "INFO" "   🧩 Fazendo backup com chunks da tabela '$table_name'..."
+        
+        if ! backup_table_chunks "$database" "$table_name" "$SOURCE_HOST" "$SOURCE_PORT"; then
+            log "ERROR" "❌ Falha no backup com chunks da tabela '$table_name'"
+            return 1
+        fi
+        
+        # Concatenar chunks ao arquivo principal
+        cat "/tmp/${table_name}_chunks_${BACKUP_DATE}.sql" >> "$backup_file" 2>/dev/null
+        rm -f "/tmp/${table_name}_chunks_${BACKUP_DATE}.sql"
+    done
+    
+    # Fazer backup tradicional das tabelas pequenas (excluindo as grandes)
+    local exclude_tables=""
+    echo "$large_tables" | while read -r table_info; do
+        local table_name=$(echo "$table_info" | awk '{print $1}')
+        exclude_tables="$exclude_tables --ignore-table=${database}.${table_name}"
+    done
+    
+    if [[ -n "$exclude_tables" ]]; then
+        log "INFO" "   📦 Fazendo backup tradicional das tabelas pequenas..."
+        local small_tables_cmd="mysqldump ${MYSQL_CLIENT_OPTIONS} -h'$SOURCE_HOST' -P'$SOURCE_PORT' -u'$DB_USERNAME' -p'$DB_PASSWORD' --no-create-info $exclude_tables '$database'"
+        
+        timeout ${MYSQLDUMP_TIMEOUT:-3600} bash -c "$small_tables_cmd" >> "$backup_file" 2>/tmp/small_tables_error.log
+    fi
+    
+    log "SUCCESS" "✅ Backup híbrido concluído"
+    return 0
+}
+
 # Função para backup por chunks de tabela específica
 backup_table_chunks() {
     local database=$1
@@ -224,6 +275,27 @@ backup_database() {
     if [[ $(echo "$db_size > 50000" | bc -l 2>/dev/null || echo "0") -eq 1 ]]; then
         is_large_db=true
         log "INFO" "   ⚡ Database grande detectado (>${db_size} MB) - aplicando configurações otimizadas"
+    fi
+    
+    # Verificar se deve usar sistema de chunks
+    if [[ "${ENABLE_AUTO_CHUNKING}" == "true" ]]; then
+        log "INFO" "   🔍 Verificando tabelas grandes para chunking..."
+        local large_tables=$(detect_large_tables "$database" "$SOURCE_HOST" "$SOURCE_PORT")
+        
+        if [[ -n "$large_tables" ]]; then
+            log "INFO" "   🧩 Tabelas grandes detectadas - usando sistema de chunks"
+            if backup_database_with_chunks "$database" "$backup_file" "$large_tables"; then
+                log "SUCCESS" "✅ Backup com chunks concluído para '$database'"
+                ((SUCCESSFUL_BACKUPS++))
+                return 0
+            else
+                log "ERROR" "❌ Falha no backup com chunks para '$database'"
+                ((FAILED_BACKUPS++))
+                return 1
+            fi
+        else
+            log "INFO" "   ✅ Nenhuma tabela grande detectada - usando backup tradicional"
+        fi
     fi
     
     # Montar comando mysqldump otimizado
