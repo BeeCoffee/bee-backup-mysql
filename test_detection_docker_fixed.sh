@@ -208,7 +208,7 @@ echo "🚀 Executando análise de detecção no container..."
 echo
 
 # Executar o script usando o modo shell
-if $DOCKER_COMPOSE_CMD run --rm mariadb-backup shell /scripts/temp_detection_test.sh; then
+if $DOCKER_COMPOSE_CMD run --rm -e RUN_MODE=script mariadb-backup /scripts/temp_detection_test.sh; then
     echo
     echo "✅ Análise de detecção concluída com sucesso!"
     echo
