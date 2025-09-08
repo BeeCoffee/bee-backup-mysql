@@ -75,140 +75,6 @@ database_exists() {
     fi
 }
 
-# Função para detectar tabelas grandes
-detect_large_tables() {
-    local database=$1
-    local host=$2
-    local port=$3
-    local size_threshold_mb=${4:-1000}  # Default: 1GB
-    
-    log "INFO" "   🔍 Detectando tabelas grandes (> ${size_threshold_mb}MB)..."
-    
-    local large_tables=$(mysql ${MYSQL_CLIENT_OPTIONS} -h"$host" -P"$port" -u"$DB_USERNAME" -p"$DB_PASSWORD" -BN -e \
-        "SELECT CONCAT(table_name, ':', ROUND((data_length + index_length) / 1024 / 1024, 2))
-         FROM information_schema.tables 
-         WHERE table_schema = '$database' 
-         AND (data_length + index_length) > ($size_threshold_mb * 1024 * 1024)
-         ORDER BY (data_length + index_length) DESC;" 2>/dev/null)
-    
-    if [[ -n "$large_tables" ]]; then
-        log "INFO" "   ⚡ Tabelas grandes encontradas:"
-        echo "$large_tables" | while IFS=':' read -r table_name size_mb; do
-            log "INFO" "      📊 $table_name: ${size_mb}MB"
-        done
-        echo "$large_tables"
-    fi
-}
-
-# Função para backup por chunks de tabela específica
-backup_table_chunks() {
-    local database=$1
-    local table=$2
-    local host=$3
-    local port=$4
-    local chunk_size=${5:-50000}  # Default: 50k registros por chunk
-    
-    log "INFO" "   🔧 Fazendo backup por CHUNKS da tabela '$table' (chunks de $chunk_size registros)"
-    
-    local temp_file="/tmp/${table}_chunks_${BACKUP_DATE}.sql"
-    
-    # Obter total de registros
-    local total_rows=$(mysql ${MYSQL_CLIENT_OPTIONS} -h"$host" -P"$port" -u"$DB_USERNAME" -p"$DB_PASSWORD" -BN -e \
-        "SELECT COUNT(*) FROM $database.$table;" 2>/dev/null || echo "0")
-    
-    if [[ "$total_rows" == "0" ]]; then
-        log "WARNING" "   ⚠️  Tabela '$table' vazia ou erro ao contar registros"
-        return 1
-    fi
-    
-    local total_chunks=$(( ($total_rows + $chunk_size - 1) / $chunk_size ))
-    log "INFO" "      📊 $total_rows registros = $total_chunks chunks"
-    
-    # Header do arquivo
-    cat > "$temp_file" << EOF
--- Backup por chunks da tabela $table ($total_rows registros)
--- Database: $database - $(date)
-SET FOREIGN_KEY_CHECKS=0;
-SET UNIQUE_CHECKS=0;
-SET AUTOCOMMIT=0;
-
-USE \`$database\`;
-
-EOF
-
-    # Exportar estrutura da tabela
-    mysqldump ${MYSQL_CLIENT_OPTIONS} -h"$host" -P"$port" -u"$DB_USERNAME" -p"$DB_PASSWORD" \
-        --no-data --single-transaction "$database" "$table" >> "$temp_file" 2>/dev/null
-    
-    # Determinar coluna de ordenação
-    local order_column=$(mysql ${MYSQL_CLIENT_OPTIONS} -h"$host" -P"$port" -u"$DB_USERNAME" -p"$DB_PASSWORD" -BN -e \
-        "SELECT COLUMN_NAME FROM information_schema.COLUMNS 
-         WHERE TABLE_SCHEMA='$database' AND TABLE_NAME='$table' 
-         AND COLUMN_KEY='PRI' ORDER BY ORDINAL_POSITION LIMIT 1;" 2>/dev/null || echo "id")
-    
-    # Processar chunks
-    local successful_chunks=0
-    for (( chunk=0; chunk<$total_chunks; chunk++ )); do
-        local offset=$(( $chunk * $chunk_size ))
-        local chunk_num=$(( $chunk + 1 ))
-        
-        log "INFO" "      📦 Chunk $chunk_num/$total_chunks (offset: $offset)"
-        
-        # Backup do chunk com retry
-        local retry=0
-        local max_chunk_retries=3
-        local chunk_success=false
-        
-        while [[ $retry -lt $max_chunk_retries ]] && [[ "$chunk_success" == false ]]; do
-            retry=$((retry + 1))
-            
-            timeout 1800 mysqldump ${MYSQL_CLIENT_OPTIONS} -h"$host" -P"$port" -u"$DB_USERNAME" -p"$DB_PASSWORD" \
-                --no-create-info --single-transaction --quick --lock-tables=false \
-                --extended-insert=false --disable-keys \
-                --where="1=1 ORDER BY $order_column LIMIT $chunk_size OFFSET $offset" \
-                "$database" "$table" >> "$temp_file" 2>/dev/null
-            
-            if [[ $? -eq 0 ]]; then
-                chunk_success=true
-                ((successful_chunks++))
-            else
-                log "WARNING" "         ⚠️ Chunk $chunk_num falhou (tentativa $retry)"
-                sleep 5
-            fi
-        done
-        
-        if [[ "$chunk_success" == false ]]; then
-            log "ERROR" "         ❌ Chunk $chunk_num falhou após $max_chunk_retries tentativas"
-        fi
-        
-        # Progresso
-        local progress=$(( (chunk_num * 100) / total_chunks ))
-        if [[ $(($chunk_num % 10)) -eq 0 ]] || [[ $chunk_num -eq $total_chunks ]]; then
-            log "INFO" "         📈 Progresso: $progress% ($chunk_num/$total_chunks)"
-        fi
-    done
-    
-    # Footer
-    cat >> "$temp_file" << EOF
-
-COMMIT;
-SET FOREIGN_KEY_CHECKS=1;
-SET UNIQUE_CHECKS=1;
-SET AUTOCOMMIT=1;
--- Chunks processados: $successful_chunks/$total_chunks
-EOF
-
-    if [[ $successful_chunks -eq $total_chunks ]]; then
-        log "SUCCESS" "   ✅ Tabela '$table' exportada por chunks ($successful_chunks/$total_chunks)"
-        echo "$temp_file"
-        return 0
-    else
-        log "ERROR" "   ❌ Tabela '$table' falhou ($successful_chunks/$total_chunks chunks)"
-        rm -f "$temp_file"
-        return 1
-    fi
-}
-
 # Função para obter tamanho do banco de dados
 get_database_size() {
     local database=$1
@@ -252,17 +118,28 @@ backup_database() {
         log "INFO" "   ⚡ Database grande detectado (>${db_size} MB) - aplicando configurações otimizadas"
     fi
     
-    # Detectar tabelas grandes que precisam de backup por chunks
-    local large_tables=$(detect_large_tables "$database" "$SOURCE_HOST" "$SOURCE_PORT" "${CHUNK_SIZE_THRESHOLD_MB:-1000}")
-    local has_large_tables=false
-    local large_tables_list=""
+    # Montar comando mysqldump otimizado
+    local dump_cmd="mysqldump ${MYSQL_CLIENT_OPTIONS} -h'$SOURCE_HOST' -P'$SOURCE_PORT' -u'$DB_USERNAME' -p'$DB_PASSWORD'"
     
-    if [[ -n "$large_tables" ]]; then
-        has_large_tables=true
-        large_tables_list=$(echo "$large_tables" | cut -d':' -f1 | tr '\n' ',' | sed 's/,$//')
-        log "INFO" "   🔧 Tabelas grandes detectadas: $large_tables_list"
-        log "INFO" "   📋 Estratégia: Backup híbrido (chunks para tabelas grandes + dump normal para demais)"
+    # Montar comando mysqldump otimizado
+    local dump_cmd="mysqldump ${MYSQL_CLIENT_OPTIONS} -h'$SOURCE_HOST' -P'$SOURCE_PORT' -u'$DB_USERNAME' -p'$DB_PASSWORD'"
+    
+    # Para databases grandes, aplicar configurações especiais
+    if [[ "$is_large_db" == true ]]; then
+        dump_cmd="$dump_cmd --quick"
+        dump_cmd="$dump_cmd --lock-tables=false"
+        dump_cmd="$dump_cmd --single-transaction"
+        dump_cmd="$dump_cmd --disable-keys"
+        dump_cmd="$dump_cmd --extended-insert=false"
+        log "INFO" "   🔧 Configurações para database grande aplicadas"
     fi
+    
+    # Adicionar opções personalizadas do usuário
+    if [[ -n "${MYSQLDUMP_OPTIONS}" ]]; then
+        dump_cmd="$dump_cmd ${MYSQLDUMP_OPTIONS}"
+    fi
+    
+    dump_cmd="$dump_cmd '$database'"
     
     # Executar backup com sistema de retry
     local start_time=$(date +%s)
@@ -275,147 +152,26 @@ backup_database() {
             sleep $retry_interval
         fi
         
-        log "INFO" "   ⏳ Executando backup estratégico (tentativa $attempt)..."
+        log "INFO" "   ⏳ Executando mysqldump (tentativa $attempt)..."
         
-        if [[ "$has_large_tables" == true ]]; then
-            # MODO HÍBRIDO: Backup com chunks para tabelas grandes
-            local temp_files=()
-            local backup_success=true
-            
-            # 1. Fazer backup da estrutura completa do database
-            log "INFO" "      🏗️  Exportando estrutura completa do database..."
-            local structure_file="/tmp/structure_${database}_${BACKUP_DATE}.sql"
-            if timeout 600 mysqldump ${MYSQL_CLIENT_OPTIONS} -h"$SOURCE_HOST" -P"$SOURCE_PORT" \
-                -u"$DB_USERNAME" -p"$DB_PASSWORD" --no-data --routines --triggers \
-                "$database" > "$structure_file" 2>/tmp/mysqldump_error_${database}.log; then
-                temp_files+=("$structure_file")
-                log "SUCCESS" "      ✅ Estrutura exportada com sucesso"
-            else
-                log "ERROR" "      ❌ Falha ao exportar estrutura do database"
-                backup_success=false
-            fi
-            
-            if [[ "$backup_success" == true ]]; then
-                # 2. Backup por chunks das tabelas grandes
-                while IFS=':' read -r table_name size_mb; do
-                    log "INFO" "      🔧 Processando tabela grande: $table_name (${size_mb}MB)"
-                    local chunk_file=$(backup_table_chunks "$database" "$table_name" "$SOURCE_HOST" "$SOURCE_PORT" "${CHUNK_SIZE:-50000}")
-                    
-                    if [[ $? -eq 0 ]] && [[ -f "$chunk_file" ]]; then
-                        temp_files+=("$chunk_file")
-                        log "SUCCESS" "      ✅ Tabela $table_name processada por chunks"
-                    else
-                        log "ERROR" "      ❌ Falha no backup por chunks da tabela $table_name"
-                        backup_success=false
-                        break
-                    fi
-                done <<< "$large_tables"
-            fi
-            
-            if [[ "$backup_success" == true ]]; then
-                # 3. Backup normal das tabelas pequenas (excluindo as grandes)
-                log "INFO" "      📦 Exportando demais tabelas (método tradicional)..."
-                local small_tables_file="/tmp/small_tables_${database}_${BACKUP_DATE}.sql"
-                local ignore_tables=""
-                
-                # Montar lista de tabelas a ignorar
-                while IFS=':' read -r table_name size_mb; do
-                    ignore_tables="$ignore_tables --ignore-table=${database}.${table_name}"
-                done <<< "$large_tables"
-                
-                local small_dump_cmd="mysqldump ${MYSQL_CLIENT_OPTIONS} -h'$SOURCE_HOST' -P'$SOURCE_PORT' -u'$DB_USERNAME' -p'$DB_PASSWORD'"
-                small_dump_cmd="$small_dump_cmd --no-create-info --single-transaction --quick --lock-tables=false"
-                small_dump_cmd="$small_dump_cmd $ignore_tables '$database'"
-                
-                if timeout ${MYSQLDUMP_TIMEOUT:-21600} bash -c "$small_dump_cmd" > "$small_tables_file" 2>/tmp/mysqldump_small_${database}.log; then
-                    temp_files+=("$small_tables_file")
-                    log "SUCCESS" "      ✅ Demais tabelas exportadas com sucesso"
-                else
-                    log "WARNING" "      ⚠️ Falha no backup das tabelas pequenas (continuando...)"
-                fi
-            fi
-            
-            # 4. Consolidar todos os arquivos temporários em um único backup
-            if [[ "$backup_success" == true ]]; then
-                log "INFO" "      🔗 Consolidando backup híbrido em arquivo único..."
-                cat > "$backup_file" << EOF
--- Backup Híbrido do Database: $database
--- Data: $(date)
--- Método: Chunks para tabelas grandes + Dump tradicional para demais
--- Tabelas processadas por chunks: $large_tables_list
--- 
-SET FOREIGN_KEY_CHECKS=0;
-SET UNIQUE_CHECKS=0;
-SET AUTOCOMMIT=0;
-
-EOF
-                
-                # Concatenar todos os arquivos temporários
-                for temp_file in "${temp_files[@]}"; do
-                    if [[ -f "$temp_file" ]]; then
-                        cat "$temp_file" >> "$backup_file"
-                        echo "" >> "$backup_file"
-                    fi
-                done
-                
-                cat >> "$backup_file" << EOF
-
-COMMIT;
-SET FOREIGN_KEY_CHECKS=1;
-SET UNIQUE_CHECKS=1;
-SET AUTOCOMMIT=1;
--- Backup híbrido concluído
-EOF
-                
-                success=true
-                log "SUCCESS" "      ✅ Backup híbrido consolidado com sucesso"
-            fi
-            
-            # Limpar arquivos temporários
-            for temp_file in "${temp_files[@]}"; do
-                [[ -f "$temp_file" ]] && rm -f "$temp_file"
-            done
-            
+        if timeout ${MYSQLDUMP_TIMEOUT:-21600} bash -c "$dump_cmd" > "$backup_file" 2>/tmp/mysqldump_error_${database}.log; then
+            success=true
         else
-            # MODO TRADICIONAL: Backup normal para databases sem tabelas grandes
-            log "INFO" "      📦 Executando backup tradicional (sem tabelas grandes detectadas)..."
+            local error_msg=$(cat /tmp/mysqldump_error_${database}.log 2>/dev/null || echo "Erro desconhecido")
+            log "ERROR" "❌ Tentativa $attempt falhou: $error_msg"
             
-            # Montar comando mysqldump otimizado
-            local dump_cmd="mysqldump ${MYSQL_CLIENT_OPTIONS} -h'$SOURCE_HOST' -P'$SOURCE_PORT' -u'$DB_USERNAME' -p'$DB_PASSWORD'"
-            
-            # Para databases grandes, aplicar configurações especiais
-            if [[ "$is_large_db" == true ]]; then
-                dump_cmd="$dump_cmd --quick --lock-tables=false --single-transaction --disable-keys --extended-insert=false"
-                log "INFO" "         🔧 Configurações para database grande aplicadas"
-            fi
-            
-            # Adicionar opções personalizadas do usuário
-            if [[ -n "${MYSQLDUMP_OPTIONS}" ]]; then
-                dump_cmd="$dump_cmd ${MYSQLDUMP_OPTIONS}"
-            fi
-            
-            dump_cmd="$dump_cmd '$database'"
-            
-            if timeout ${MYSQLDUMP_TIMEOUT:-21600} bash -c "$dump_cmd" > "$backup_file" 2>/tmp/mysqldump_error_${database}.log; then
-                success=true
-                log "SUCCESS" "      ✅ Backup tradicional concluído"
-            else
-                local error_msg=$(cat /tmp/mysqldump_error_${database}.log 2>/dev/null || echo "Erro desconhecido")
-                log "ERROR" "      ❌ Tentativa $attempt falhou: $error_msg"
-                
-                # Verificar se é erro de conexão que pode ser resolvido com retry
-                if echo "$error_msg" | grep -iE "lost connection|timeout|connection reset|can't connect|server has gone away"; then
-                    if [[ $attempt -lt $max_retries ]]; then
-                        log "INFO" "      🔄 Erro de conexão detectado - tentando novamente em ${retry_interval}s"
-                        ((attempt++))
-                        continue
-                    else
-                        log "ERROR" "      ❌ Todas as tentativas de conexão falharam para '$database'"
-                    fi
+            # Verificar se é erro de conexão que pode ser resolvido com retry
+            if echo "$error_msg" | grep -iE "lost connection|timeout|connection reset|can't connect|server has gone away"; then
+                if [[ $attempt -lt $max_retries ]]; then
+                    log "INFO" "   🔄 Erro de conexão detectado - tentando novamente em ${retry_interval}s"
+                    ((attempt++))
+                    continue
                 else
-                    log "ERROR" "      ❌ Erro não recuperável detectado - abortando backup do '$database'"
-                    break
+                    log "ERROR" "   ❌ Todas as tentativas de conexão falharam para '$database'"
                 fi
+            else
+                log "ERROR" "   ❌ Erro não recuperável detectado - abortando backup do '$database'"
+                break
             fi
         fi
         
