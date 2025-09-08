@@ -75,6 +75,114 @@ database_exists() {
     fi
 }
 
+# Função para detectar tabelas grandes
+detect_large_tables() {
+    local database=$1
+    local host=$2
+    local port=$3
+    local size_threshold_mb=${4:-1000}
+    
+    log "INFO" "   🔍 Detectando tabelas grandes (> ${size_threshold_mb}MB)..."
+    
+    local large_tables=$(mysql ${MYSQL_CLIENT_OPTIONS} -h"$host" -P"$port" -u"$DB_USERNAME" -p"$DB_PASSWORD" -BN -e \
+        "SELECT CONCAT(table_name, ':', ROUND((data_length + index_length) / 1024 / 1024, 2))
+         FROM information_schema.tables 
+         WHERE table_schema = '$database' 
+         AND (data_length + index_length) > ($size_threshold_mb * 1024 * 1024)
+         ORDER BY (data_length + index_length) DESC;" 2>/dev/null)
+    
+    if [[ -n "$large_tables" ]]; then
+        log "INFO" "   ⚡ Tabelas grandes encontradas:"
+        echo "$large_tables" | while IFS=':' read -r table_name size_mb; do
+            log "INFO" "      📊 $table_name: ${size_mb}MB"
+        done
+        echo "$large_tables"
+    fi
+}
+
+# Função para backup por chunks de tabela específica
+backup_table_chunks() {
+    local database=$1
+    local table=$2
+    local host=$3
+    local port=$4
+    local chunk_size=${5:-50000}
+    
+    log "INFO" "   🔧 Fazendo backup por CHUNKS da tabela '$table' (chunks de $chunk_size registros)"
+    
+    local temp_file="/tmp/${table}_chunks_${BACKUP_DATE}.sql"
+    
+    # Obter total de registros
+    local total_rows=$(mysql ${MYSQL_CLIENT_OPTIONS} -h"$host" -P"$port" -u"$DB_USERNAME" -p"$DB_PASSWORD" -BN -e \
+        "SELECT COUNT(*) FROM $database.$table;" 2>/dev/null || echo "0")
+    
+    if [[ "$total_rows" == "0" ]]; then
+        log "WARNING" "   ⚠️  Tabela '$table' vazia ou erro ao contar registros"
+        return 1
+    fi
+    
+    local total_chunks=$(( ($total_rows + $chunk_size - 1) / $chunk_size ))
+    log "INFO" "      📊 $total_rows registros = $total_chunks chunks"
+    
+    # Header do arquivo
+    cat > "$temp_file" << EOF
+-- Backup por chunks da tabela $table ($total_rows registros)
+-- Database: $database - $(date)
+SET FOREIGN_KEY_CHECKS=0;
+SET UNIQUE_CHECKS=0;
+SET AUTOCOMMIT=0;
+
+USE \`$database\`;
+
+EOF
+
+    # Exportar estrutura da tabela
+    mysqldump ${MYSQL_CLIENT_OPTIONS} -h"$host" -P"$port" -u"$DB_USERNAME" -p"$DB_PASSWORD" \
+        --no-data --single-transaction "$database" "$table" >> "$temp_file" 2>/dev/null
+    
+    # Processar chunks
+    local successful_chunks=0
+    for (( chunk=0; chunk<$total_chunks; chunk++ )); do
+        local offset=$(( $chunk * $chunk_size ))
+        local chunk_num=$(( $chunk + 1 ))
+        
+        log "INFO" "      📦 Chunk $chunk_num/$total_chunks (offset: $offset)"
+        
+        # Backup do chunk
+        timeout 1800 mysqldump ${MYSQL_CLIENT_OPTIONS} -h"$host" -P"$port" -u"$DB_USERNAME" -p"$DB_PASSWORD" \
+            --no-create-info --single-transaction --quick --lock-tables=false \
+            --extended-insert=false --disable-keys \
+            --where="1=1 ORDER BY (SELECT NULL) LIMIT $chunk_size OFFSET $offset" \
+            "$database" "$table" >> "$temp_file" 2>/dev/null
+        
+        if [[ $? -eq 0 ]]; then
+            ((successful_chunks++))
+        else
+            log "WARNING" "         ⚠️ Chunk $chunk_num falhou"
+        fi
+    done
+    
+    # Footer
+    cat >> "$temp_file" << EOF
+
+COMMIT;
+SET FOREIGN_KEY_CHECKS=1;
+SET UNIQUE_CHECKS=1;
+SET AUTOCOMMIT=1;
+-- Chunks processados: $successful_chunks/$total_chunks
+EOF
+
+    if [[ $successful_chunks -eq $total_chunks ]]; then
+        log "SUCCESS" "   ✅ Tabela '$table' exportada por chunks ($successful_chunks/$total_chunks)"
+        echo "$temp_file"
+        return 0
+    else
+        log "ERROR" "   ❌ Tabela '$table' falhou ($successful_chunks/$total_chunks chunks)"
+        rm -f "$temp_file"
+        return 1
+    fi
+}
+
 # Função para obter tamanho do banco de dados
 get_database_size() {
     local database=$1
