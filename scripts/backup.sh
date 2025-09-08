@@ -320,9 +320,9 @@ backup_database() {
         if [[ -n "$large_tables" ]]; then
             log "INFO" "   🧩 Tabelas grandes detectadas - usando sistema de chunks"
             if backup_database_with_chunks "$database" "$backup_file" "$large_tables"; then
-                log "SUCCESS" "✅ Backup com chunks concluído para '$database'"
-                ((SUCCESSFUL_BACKUPS++))
-                return 0
+                log "SUCCESS" "✅ [ETAPA 1/5] Backup híbrido concluído para '$database'"
+                # Flag para pular mysqldump tradicional
+                local hybrid_backup_done=true
             else
                 log "ERROR" "❌ Falha no backup com chunks para '$database'"
                 ((FAILED_BACKUPS++))
@@ -330,11 +330,16 @@ backup_database() {
             fi
         else
             log "INFO" "   ✅ Nenhuma tabela grande detectada - usando backup tradicional"
+            local hybrid_backup_done=false
         fi
+    else
+        local hybrid_backup_done=false
     fi
     
-    # Montar comando mysqldump otimizado
-    local dump_cmd="mysqldump ${MYSQL_CLIENT_OPTIONS} -h'$SOURCE_HOST' -P'$SOURCE_PORT' -u'$DB_USERNAME' -p'$DB_PASSWORD'"
+    # Se não foi feito backup híbrido, usar mysqldump tradicional
+    if [[ "$hybrid_backup_done" != true ]]; then
+        # Montar comando mysqldump otimizado
+        local dump_cmd="mysqldump ${MYSQL_CLIENT_OPTIONS} -h'$SOURCE_HOST' -P'$SOURCE_PORT' -u'$DB_USERNAME' -p'$DB_PASSWORD'"
     
     # Montar comando mysqldump otimizado
     local dump_cmd="mysqldump ${MYSQL_CLIENT_OPTIONS} -h'$SOURCE_HOST' -P'$SOURCE_PORT' -u'$DB_USERNAME' -p'$DB_PASSWORD'"
@@ -423,43 +428,7 @@ backup_database() {
                 log "INFO" "   ⏭️  [ETAPA 2/5] Compressão desabilitada, pulando..."
             fi
             
-            log "SUCCESS" "✅ Backup do '$database' concluído (${file_size_mb} MB em ${duration}s)"
-            TOTAL_SIZE=$(echo "$TOTAL_SIZE + $file_size_mb" | bc 2>/dev/null || echo "$TOTAL_SIZE")
-            
-            # Verificar integridade se habilitado
-            if [[ "${VERIFY_BACKUP_INTEGRITY:-true}" == "true" ]]; then
-                log "INFO" "   🔍 [ETAPA 3/5] Iniciando verificação de integridade..."
-                if verify_backup_integrity "$backup_file" "$database"; then
-                    log "SUCCESS" "   ✅ [ETAPA 3/5] Verificação de integridade concluída"
-                else
-                    log "WARNING" "   ⚠️  [ETAPA 3/5] Verificação com avisos, continuando..."
-                fi
-            else
-                log "INFO" "   ⏭️  [ETAPA 3/5] Verificação de integridade desabilitada, pulando..."
-            fi
-            
-            # Restaurar no servidor de destino (somente se DEST_HOST estiver configurado)
-            if [[ -n "${DEST_HOST}" && "${DEST_HOST}" != "" ]]; then
-                log "INFO" "   🔄 [ETAPA 4/5] Iniciando restauração no servidor de destino..."
-                if restore_to_destination "$backup_file" "$database"; then
-                    log "SUCCESS" "🎉 [ETAPA 5/5] Backup completo do '$database' finalizado com sucesso!"
-                else
-                    log "ERROR" "❌ [ETAPA 4/5] Falha na restauração do '$database', mas backup local foi salvo"
-                    log "SUCCESS" "🎉 [ETAPA 4/4] Backup local do '$database' finalizado com sucesso!"
-                fi
-                log "INFO" "   📊 Tamanho final: ${file_size_mb} MB"
-                log "INFO" "   ⏱️  Tempo total: ${duration}s"
-                log "INFO" "   🎯 Backup + Restauração executados"
-            else
-                log "INFO" "   ⏭️  [ETAPA 4/5] DEST_HOST não configurado - pulando restauração"
-                log "SUCCESS" "🎉 [ETAPA 4/4] Backup do '$database' finalizado com sucesso!"
-                log "INFO" "   📊 Tamanho final: ${file_size_mb} MB"
-                log "INFO" "   ⏱️  Tempo total: ${duration}s"
-                log "INFO" "   💾 Somente backup executado (sem restauração)"
-            fi
-            
-            ((SUCCESSFUL_BACKUPS++))
-            return 0
+            log "SUCCESS" "   ✅ [ETAPA 1/5] Extração de dados concluída (${duration}s)"
         else
             log "ERROR" "❌ Arquivo de backup vazio ou não foi criado"
             if [[ -f "/tmp/mysqldump_error_${database}.log" ]]; then
@@ -473,6 +442,80 @@ backup_database() {
         if [[ -f "/tmp/mysqldump_error_${database}.log" ]]; then
             log "ERROR" "   Erro: $(cat /tmp/mysqldump_error_${database}.log)"
         fi
+        ((FAILED_BACKUPS++))
+        return 1
+    fi
+    fi # Fechar o bloco do mysqldump tradicional
+    
+    # Pós-processamento comum para backup híbrido ou tradicional
+    if [[ -s "$backup_file" ]]; then
+        local file_size=$(stat -c%s "$backup_file")
+        local file_size_mb=$(echo "scale=1; $file_size / 1024 / 1024" | bc 2>/dev/null || echo "0.0")
+        
+        # Se não foi calculada duração ainda (caso do backup híbrido), calcular agora
+        if [[ -z "$duration" ]]; then
+            local end_time=$(date +%s)
+            duration=$((end_time - start_time))
+        fi
+        
+        # Comprimir se habilitado
+        if [[ "${BACKUP_COMPRESSION:-true}" == "true" ]]; then
+            log "INFO" "   🗜️  [ETAPA 2/5] Iniciando compressão do backup..."
+            local compress_start=$(date +%s)
+            if gzip "$backup_file"; then
+                local compress_end=$(date +%s)
+                local compress_duration=$((compress_end - compress_start))
+                backup_file="${backup_file}.gz"
+                local compressed_size=$(stat -c%s "$backup_file")
+                local compressed_size_mb=$(echo "scale=1; $compressed_size / 1024 / 1024" | bc 2>/dev/null || echo "0.0")
+                file_size_mb="$compressed_size_mb"
+                log "SUCCESS" "   ✅ [ETAPA 2/5] Compressão concluída (${compressed_size_mb} MB em ${compress_duration}s)"
+            else
+                log "WARNING" "   ⚠️  [ETAPA 2/5] Falha na compressão, mantendo arquivo original"
+            fi
+        else
+            log "INFO" "   ⏭️  [ETAPA 2/5] Compressão desabilitada, pulando..."
+        fi
+        
+        log "SUCCESS" "✅ Backup do '$database' concluído (${file_size_mb} MB em ${duration}s)"
+        TOTAL_SIZE=$(echo "$TOTAL_SIZE + $file_size_mb" | bc 2>/dev/null || echo "$TOTAL_SIZE")
+        
+        # Verificar integridade se habilitado
+        if [[ "${VERIFY_BACKUP_INTEGRITY:-true}" == "true" ]]; then
+            log "INFO" "   🔍 [ETAPA 3/5] Iniciando verificação de integridade..."
+            if verify_backup_integrity "$backup_file" "$database"; then
+                log "SUCCESS" "   ✅ [ETAPA 3/5] Verificação de integridade concluída"
+            else
+                log "WARNING" "   ⚠️  [ETAPA 3/5] Verificação com avisos, continuando..."
+            fi
+        else
+            log "INFO" "   ⏭️  [ETAPA 3/5] Verificação de integridade desabilitada, pulando..."
+        fi
+        
+        # Restaurar no servidor de destino (somente se DEST_HOST estiver configurado)
+        if [[ -n "${DEST_HOST}" && "${DEST_HOST}" != "" ]]; then
+            log "INFO" "   🔄 [ETAPA 4/5] Iniciando restauração no servidor de destino..."
+            if restore_to_destination "$backup_file" "$database"; then
+                log "SUCCESS" "🎉 [ETAPA 5/5] Backup completo do '$database' finalizado com sucesso!"
+            else
+                log "ERROR" "❌ [ETAPA 4/5] Falha na restauração do '$database', mas backup local foi salvo"
+                log "SUCCESS" "🎉 [ETAPA 4/4] Backup local do '$database' finalizado com sucesso!"
+            fi
+            log "INFO" "   📊 Tamanho final: ${file_size_mb} MB"
+            log "INFO" "   ⏱️  Tempo total: ${duration}s"
+            log "INFO" "   🎯 Backup + Restauração executados"
+        else
+            log "INFO" "   ⏭️  [ETAPA 4/5] DEST_HOST não configurado - pulando restauração"
+            log "SUCCESS" "🎉 [ETAPA 4/4] Backup do '$database' finalizado com sucesso!"
+            log "INFO" "   📊 Tamanho final: ${file_size_mb} MB"
+            log "INFO" "   ⏱️  Tempo total: ${duration}s"
+            log "INFO" "   💾 Somente backup executado (sem restauração)"
+        fi
+        
+        ((SUCCESSFUL_BACKUPS++))
+        return 0
+    else
+        log "ERROR" "❌ Arquivo de backup vazio ou não foi criado"
         ((FAILED_BACKUPS++))
         return 1
     fi
