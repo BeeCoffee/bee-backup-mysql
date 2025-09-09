@@ -7,15 +7,19 @@
 echo "🔍 DIAGNÓSTICO DO BACKUP DE 200GB"
 echo "=================================="
 
-# Carregar configurações
-if [[ -f "/app/.env" ]]; then
-    set -a
-    source /app/.env
-    set +a
-else
-    echo "❌ Arquivo .env não encontrado!"
+# As variáveis de ambiente já são carregadas pelo docker-compose via env_file
+# Verificar se as variáveis essenciais existem
+if [[ -z "$SOURCE_HOST" ]] || [[ -z "$DB_USERNAME" ]] || [[ -z "$DB_PASSWORD" ]]; then
+    echo "❌ Variáveis de ambiente essenciais não encontradas!"
+    echo "� Variáveis disponíveis:"
+    env | grep -E "SOURCE_|DB_|DEST_|CHUNK_" | sort
     exit 1
 fi
+
+log "INFO" "✅ Variáveis de ambiente carregadas via docker-compose"
+log "INFO" "   SOURCE_HOST: $SOURCE_HOST"
+log "INFO" "   SOURCE_PORT: ${SOURCE_PORT:-3306}"
+log "INFO" "   DATABASES: ${DATABASES:-N/A}"
 
 # Função de log
 log() {
