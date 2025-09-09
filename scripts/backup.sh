@@ -229,22 +229,47 @@ EOF
         log "INFO" "      📦 Chunk $chunk_num/$total_chunks (offset: $offset)"
         
         # Backup do chunk com configurações ZERO LOCK para produção
-        timeout ${CHUNK_TIMEOUT:-1800} mysqldump ${MYSQL_CLIENT_OPTIONS} -h"$host" -P"$port" -u"$DB_USERNAME" -p"$DB_PASSWORD" \
+        local chunk_cmd="mysqldump ${MYSQL_CLIENT_OPTIONS} -h'$host' -P'$port' -u'$DB_USERNAME' -p'$DB_PASSWORD' \
             --no-create-info --single-transaction --quick \
             --lock-tables=false --skip-lock-tables --skip-add-locks \
             --no-tablespaces --extended-insert=false --disable-keys \
-            --where="1=1 ORDER BY (SELECT NULL) LIMIT $chunk_size OFFSET $offset" \
-            "$database" "$table" >> "$temp_file" 2>/dev/null
+            --where='1=1 LIMIT $chunk_size OFFSET $offset' \
+            '$database' '$table'"
         
-        if [[ $? -eq 0 ]]; then
+        # Executar com timeout reduzido e log de erros
+        if timeout ${CHUNK_TIMEOUT:-300} bash -c "$chunk_cmd" >> "$temp_file" 2>/tmp/chunk_error_${chunk_num}.log; then
             ((successful_chunks++))
+            log "SUCCESS" "         ✅ Chunk $chunk_num exportado"
             
             # Pausa pequena entre chunks para não sobrecarregar produção
             if [[ -n "${CHUNK_INTERVAL_MS}" ]] && [[ "${CHUNK_INTERVAL_MS}" -gt 0 ]]; then
                 sleep $(echo "scale=3; ${CHUNK_INTERVAL_MS} / 1000" | bc 2>/dev/null || echo "0.1")
+            else
+                sleep 1  # Pausa mínima de 1s entre chunks
             fi
         else
-            log "WARNING" "         ⚠️ Chunk $chunk_num falhou"
+            local error_msg=$(cat /tmp/chunk_error_${chunk_num}.log 2>/dev/null || echo "Erro desconhecido")
+            log "ERROR" "         ❌ Chunk $chunk_num falhou: $error_msg"
+            
+            # Para tabelas muito grandes, tentar com chunk menor
+            if [[ "$chunk_size" -gt 10000 ]]; then
+                log "WARNING" "         🔄 Tentando chunk menor (10000 registros)..."
+                local smaller_chunk_cmd="mysqldump ${MYSQL_CLIENT_OPTIONS} -h'$host' -P'$port' -u'$DB_USERNAME' -p'$DB_PASSWORD' \
+                    --no-create-info --single-transaction --quick \
+                    --lock-tables=false --skip-lock-tables --skip-add-locks \
+                    --no-tablespaces --extended-insert=false --disable-keys \
+                    --where='1=1 LIMIT 10000 OFFSET $offset' \
+                    '$database' '$table'"
+                
+                if timeout 180 bash -c "$smaller_chunk_cmd" >> "$temp_file" 2>/tmp/chunk_small_error_${chunk_num}.log; then
+                    ((successful_chunks++))
+                    log "SUCCESS" "         ✅ Chunk $chunk_num exportado (chunk menor)"
+                else
+                    log "ERROR" "         ❌ Chunk $chunk_num falhou mesmo com chunk menor"
+                fi
+            fi
+            
+            rm -f /tmp/chunk_error_${chunk_num}.log /tmp/chunk_small_error_${chunk_num}.log 2>/dev/null
         fi
     done
     
