@@ -54,9 +54,12 @@ docker exec bee-backup restore <arquivo>   # Restaura backup específico
 
 # GERENCIAMENTO
 docker exec bee-backup list                # Lista backups
-docker exec bee-backup test                # Testa conexão
+docker exec bee-backup test-connection     # Testa conexão
 docker exec bee-backup clean               # Remove backups antigos
 ```
+
+> **Formato alternativo:** Se algum comando não funcionar, use:  
+> `docker exec bee-backup /bee-backup.sh <comando>`
 
 ---
 

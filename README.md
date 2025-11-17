@@ -53,6 +53,8 @@ docker exec bee-backup list
 docker exec bee-backup restore
 ```
 
+> **Nota:** Se o comando não funcionar, use: `docker exec bee-backup /bee-backup.sh backup`
+
 **Pronto! É só isso.** ✨
 
 ---
@@ -381,8 +383,13 @@ BACKUP_TIME=0 0 * * 0
 | `restore` | Restaura bancos do .env |
 | `restore full` | Restaura todos os backups |
 | `list` | Lista backups disponíveis |
-| `test` | Testa conexão com servidores |
+| `test-connection` | Testa conexão com servidores |
 | `clean` | Remove backups antigos |
+
+**Formato:** `docker exec bee-backup <comando>`
+
+> **Nota:** Se algum comando não funcionar após o build, use o formato alternativo:  
+> `docker exec bee-backup /bee-backup.sh <comando>`
 
 ---
 

@@ -38,10 +38,18 @@ RUN mkdir -p /app /backups /logs /config /scripts && \
 COPY scripts/ /scripts/
 COPY entrypoint.sh /app/entrypoint.sh
 COPY bee-backup.sh /bee-backup.sh
+COPY wrapper.sh /usr/local/bin/wrapper.sh
 
 # Dar permissões de execução
-RUN chmod +x /app/entrypoint.sh /scripts/*.sh /bee-backup.sh && \
+RUN chmod +x /app/entrypoint.sh /scripts/*.sh /bee-backup.sh /usr/local/bin/wrapper.sh && \
     chown -R backup:backup /scripts/ /app/ /bee-backup.sh
+
+# Criar symlinks para comandos principais
+RUN ln -s /usr/local/bin/wrapper.sh /usr/local/bin/backup && \
+    ln -s /usr/local/bin/wrapper.sh /usr/local/bin/restore && \
+    ln -s /usr/local/bin/wrapper.sh /usr/local/bin/list && \
+    ln -s /usr/local/bin/wrapper.sh /usr/local/bin/test-connection && \
+    ln -s /usr/local/bin/wrapper.sh /usr/local/bin/clean
 
 # Configurar volumes
 VOLUME ["/backups", "/logs", "/config"]
