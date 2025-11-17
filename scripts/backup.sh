@@ -365,111 +365,74 @@ backup_database() {
     if [[ "$hybrid_backup_done" != true ]]; then
         # Montar comando mysqldump otimizado
         local dump_cmd="mysqldump ${MYSQL_CLIENT_OPTIONS} -h'$SOURCE_HOST' -P'$SOURCE_PORT' -u'$DB_USERNAME' -p'$DB_PASSWORD'"
-    
-    # Montar comando mysqldump otimizado
-    local dump_cmd="mysqldump ${MYSQL_CLIENT_OPTIONS} -h'$SOURCE_HOST' -P'$SOURCE_PORT' -u'$DB_USERNAME' -p'$DB_PASSWORD'"
-    
-    # Para databases grandes, aplicar configurações especiais
-    if [[ "$is_large_db" == true ]]; then
-        dump_cmd="$dump_cmd --quick"
-        dump_cmd="$dump_cmd --lock-tables=false"
-        dump_cmd="$dump_cmd --single-transaction"
-        dump_cmd="$dump_cmd --disable-keys"
-        dump_cmd="$dump_cmd --extended-insert=false"
-        log "INFO" "   🔧 Configurações para database grande aplicadas"
-    fi
-    
-    # Adicionar opções personalizadas do usuário
-    if [[ -n "${MYSQLDUMP_OPTIONS}" ]]; then
-        dump_cmd="$dump_cmd ${MYSQLDUMP_OPTIONS}"
-    fi
-    
-    dump_cmd="$dump_cmd '$database'"
-    
-    # Executar backup com sistema de retry
-    local start_time=$(date +%s)
-    local attempt=1
-    local success=false
-    
-    while [[ $attempt -le $max_retries ]] && [[ "$success" == false ]]; do
-        if [[ $attempt -gt 1 ]]; then
-            log "WARNING" "   ⚠️  Tentativa ${attempt}/${max_retries} para backup do '$database'"
-            sleep $retry_interval
+        
+        # Para databases grandes, aplicar configurações especiais
+        if [[ "$is_large_db" == true ]]; then
+            dump_cmd="$dump_cmd --quick"
+            dump_cmd="$dump_cmd --lock-tables=false"
+            dump_cmd="$dump_cmd --single-transaction"
+            dump_cmd="$dump_cmd --disable-keys"
+            dump_cmd="$dump_cmd --extended-insert=false"
+            log "INFO" "   🔧 Configurações para database grande aplicadas"
         fi
         
-        log "INFO" "   ⏳ Executando mysqldump (tentativa $attempt)..."
-        
-        if timeout ${MYSQLDUMP_TIMEOUT:-21600} bash -c "$dump_cmd" > "$backup_file" 2>/tmp/mysqldump_error_${database}.log; then
-            success=true
-        else
-            local error_msg=$(cat /tmp/mysqldump_error_${database}.log 2>/dev/null || echo "Erro desconhecido")
-            log "ERROR" "❌ Tentativa $attempt falhou: $error_msg"
-            
-            # Verificar se é erro de conexão que pode ser resolvido com retry
-            if echo "$error_msg" | grep -iE "lost connection|timeout|connection reset|can't connect|server has gone away"; then
-                if [[ $attempt -lt $max_retries ]]; then
-                    log "INFO" "   🔄 Erro de conexão detectado - tentando novamente em ${retry_interval}s"
-                    ((attempt++))
-                    continue
-                else
-                    log "ERROR" "   ❌ Todas as tentativas de conexão falharam para '$database'"
-                fi
-            else
-                log "ERROR" "   ❌ Erro não recuperável detectado - abortando backup do '$database'"
-                break
-            fi
+        # Adicionar opções personalizadas do usuário
+        if [[ -n "${MYSQLDUMP_OPTIONS}" ]]; then
+            dump_cmd="$dump_cmd ${MYSQLDUMP_OPTIONS}"
         fi
         
-        ((attempt++))
-    done
-    
-    if [[ "$success" == true ]]; then
-        local end_time=$(date +%s)
-        local duration=$((end_time - start_time))
+        dump_cmd="$dump_cmd '$database'"
         
-        log "SUCCESS" "   ✅ [ETAPA 1/5] Extração de dados concluída (${duration}s)"
+        # Executar backup com sistema de retry
+        local start_time=$(date +%s)
+        local attempt=1
+        local success=false
         
-        # Verificar se arquivo foi criado e não está vazio
-        if [[ -s "$backup_file" ]]; then
-            local file_size=$(stat -c%s "$backup_file")
-            local file_size_mb=$(echo "scale=1; $file_size / 1024 / 1024" | bc 2>/dev/null || echo "0.0")
-            
-            # Comprimir se habilitado
-            if [[ "${BACKUP_COMPRESSION:-true}" == "true" ]]; then
-                log "INFO" "   🗜️  [ETAPA 2/5] Iniciando compressão do backup..."
-                local compress_start=$(date +%s)
-                if gzip "$backup_file"; then
-                    local compress_end=$(date +%s)
-                    local compress_duration=$((compress_end - compress_start))
-                    backup_file="${backup_file}.gz"
-                    local compressed_size=$(stat -c%s "$backup_file")
-                    local compressed_size_mb=$(echo "scale=1; $compressed_size / 1024 / 1024" | bc 2>/dev/null || echo "0.0")
-                    file_size_mb="$compressed_size_mb"
-                    log "SUCCESS" "   ✅ [ETAPA 2/5] Compressão concluída (${compressed_size_mb} MB em ${compress_duration}s)"
-                else
-                    log "WARNING" "   ⚠️  [ETAPA 2/5] Falha na compressão, mantendo arquivo original"
-                fi
-            else
-                log "INFO" "   ⏭️  [ETAPA 2/5] Compressão desabilitada, pulando..."
+        while [[ $attempt -le $max_retries ]] && [[ "$success" == false ]]; do
+            if [[ $attempt -gt 1 ]]; then
+                log "WARNING" "   ⚠️  Tentativa ${attempt}/${max_retries} para backup do '$database'"
+                sleep $retry_interval
             fi
+            
+            log "INFO" "   ⏳ Executando mysqldump (tentativa $attempt)..."
+            
+            if timeout ${MYSQLDUMP_TIMEOUT:-21600} bash -c "$dump_cmd" > "$backup_file" 2>/tmp/mysqldump_error_${database}.log; then
+                success=true
+            else
+                local error_msg=$(cat /tmp/mysqldump_error_${database}.log 2>/dev/null || echo "Erro desconhecido")
+                log "ERROR" "❌ Tentativa $attempt falhou: $error_msg"
+                
+                # Verificar se é erro de conexão que pode ser resolvido com retry
+                if echo "$error_msg" | grep -iE "lost connection|timeout|connection reset|can't connect|server has gone away"; then
+                    if [[ $attempt -lt $max_retries ]]; then
+                        log "INFO" "   🔄 Erro de conexão detectado - tentando novamente em ${retry_interval}s"
+                        ((attempt++))
+                        continue
+                    else
+                        log "ERROR" "   ❌ Todas as tentativas de conexão falharam para '$database'"
+                    fi
+                else
+                    log "ERROR" "   ❌ Erro não recuperável detectado - abortando backup do '$database'"
+                    break
+                fi
+            fi
+            
+            ((attempt++))
+        done
+        
+        if [[ "$success" == true ]]; then
+            local end_time=$(date +%s)
+            local duration=$((end_time - start_time))
             
             log "SUCCESS" "   ✅ [ETAPA 1/5] Extração de dados concluída (${duration}s)"
         else
-            log "ERROR" "❌ Arquivo de backup vazio ou não foi criado"
+            log "ERROR" "❌ Falha no mysqldump para '$database'"
             if [[ -f "/tmp/mysqldump_error_${database}.log" ]]; then
-                log "ERROR" "   Erro do mysqldump: $(cat /tmp/mysqldump_error_${database}.log)"
+                log "ERROR" "   Erro: $(cat /tmp/mysqldump_error_${database}.log)"
             fi
             ((FAILED_BACKUPS++))
             return 1
         fi
-    else
-        log "ERROR" "❌ Falha no mysqldump para '$database'"
-        if [[ -f "/tmp/mysqldump_error_${database}.log" ]]; then
-            log "ERROR" "   Erro: $(cat /tmp/mysqldump_error_${database}.log)"
-        fi
-        ((FAILED_BACKUPS++))
-        return 1
-    fi
     fi # Fechar o bloco do mysqldump tradicional
     
     # Pós-processamento comum para backup híbrido ou tradicional
@@ -483,7 +446,7 @@ backup_database() {
             duration=$((end_time - start_time))
         fi
         
-        # Comprimir se habilitado
+        # ETAPA 2: Compressão
         if [[ "${BACKUP_COMPRESSION:-true}" == "true" ]]; then
             log "INFO" "   🗜️  [ETAPA 2/5] Iniciando compressão do backup..."
             local compress_start=$(date +%s)
@@ -502,10 +465,7 @@ backup_database() {
             log "INFO" "   ⏭️  [ETAPA 2/5] Compressão desabilitada, pulando..."
         fi
         
-        log "SUCCESS" "✅ Backup do '$database' concluído (${file_size_mb} MB em ${duration}s)"
-        TOTAL_SIZE=$(echo "$TOTAL_SIZE + $file_size_mb" | bc 2>/dev/null || echo "$TOTAL_SIZE")
-        
-        # Verificar integridade se habilitado
+        # ETAPA 3: Verificar integridade
         if [[ "${VERIFY_BACKUP_INTEGRITY:-true}" == "true" ]]; then
             log "INFO" "   🔍 [ETAPA 3/5] Iniciando verificação de integridade..."
             if verify_backup_integrity "$backup_file" "$database"; then
@@ -517,25 +477,31 @@ backup_database() {
             log "INFO" "   ⏭️  [ETAPA 3/5] Verificação de integridade desabilitada, pulando..."
         fi
         
-        # Restaurar no servidor de destino (somente se DEST_HOST estiver configurado)
+        # ETAPA 4: Restaurar no servidor de destino (somente se DEST_HOST estiver configurado)
         if [[ -n "${DEST_HOST}" && "${DEST_HOST}" != "" ]]; then
             log "INFO" "   🔄 [ETAPA 4/5] Iniciando restauração no servidor de destino..."
             if restore_to_destination "$backup_file" "$database"; then
+                log "SUCCESS" "   ✅ [ETAPA 4/5] Restauração concluída com sucesso"
                 log "SUCCESS" "🎉 [ETAPA 5/5] Backup completo do '$database' finalizado com sucesso!"
+                log "INFO" "   📊 Tamanho final: ${file_size_mb} MB"
+                log "INFO" "   ⏱️  Tempo total: ${duration}s"
+                log "INFO" "   🎯 Backup + Restauração executados"
             else
                 log "ERROR" "❌ [ETAPA 4/5] Falha na restauração do '$database', mas backup local foi salvo"
-                log "SUCCESS" "🎉 [ETAPA 4/4] Backup local do '$database' finalizado com sucesso!"
+                log "SUCCESS" "🎉 [ETAPA 5/5] Backup local do '$database' finalizado (restauração falhou)"
+                log "INFO" "   📊 Tamanho final: ${file_size_mb} MB"
+                log "INFO" "   ⏱️  Tempo total: ${duration}s"
+                log "INFO" "   💾 Backup salvo, mas restauração falhou"
             fi
-            log "INFO" "   📊 Tamanho final: ${file_size_mb} MB"
-            log "INFO" "   ⏱️  Tempo total: ${duration}s"
-            log "INFO" "   🎯 Backup + Restauração executados"
         else
             log "INFO" "   ⏭️  [ETAPA 4/5] DEST_HOST não configurado - pulando restauração"
-            log "SUCCESS" "🎉 [ETAPA 4/4] Backup do '$database' finalizado com sucesso!"
+            log "SUCCESS" "🎉 [ETAPA 5/5] Backup do '$database' finalizado com sucesso!"
             log "INFO" "   📊 Tamanho final: ${file_size_mb} MB"
             log "INFO" "   ⏱️  Tempo total: ${duration}s"
             log "INFO" "   💾 Somente backup executado (sem restauração)"
         fi
+        
+        TOTAL_SIZE=$(echo "$TOTAL_SIZE + $file_size_mb" | bc 2>/dev/null || echo "$TOTAL_SIZE")
         
         ((SUCCESSFUL_BACKUPS++))
         return 0

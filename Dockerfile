@@ -37,10 +37,11 @@ RUN mkdir -p /app /backups /logs /config /scripts && \
 # Copiar scripts
 COPY scripts/ /scripts/
 COPY entrypoint.sh /app/entrypoint.sh
+COPY bee-backup.sh /bee-backup.sh
 
 # Dar permissões de execução
-RUN chmod +x /app/entrypoint.sh /scripts/*.sh && \
-    chown -R backup:backup /scripts/ /app/
+RUN chmod +x /app/entrypoint.sh /scripts/*.sh /bee-backup.sh && \
+    chown -R backup:backup /scripts/ /app/ /bee-backup.sh
 
 # Configurar volumes
 VOLUME ["/backups", "/logs", "/config"]

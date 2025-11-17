@@ -49,12 +49,14 @@ show_help() {
 📋 Parâmetros:
     arquivo_backup   Caminho para o arquivo de backup (.sql ou .sql.gz)
     nome_database    Nome do database de destino
-    servidor         'source' (origem) ou 'dest' (destino) - padrão: dest
+    servidor         'source' (origem), 'dest' (destino), ou IP:PORTA customizado - padrão: dest
 
 📝 Exemplos:
     $0 /backups/backup_loja_20240903.sql.gz loja_online
     $0 /backups/backup_loja_20240903.sql.gz loja_online dest
     $0 /backups/backup_loja_20240903.sql.gz loja_online source
+    $0 /backups/backup_loja_20240903.sql.gz loja_online 127.0.0.1:3306
+    $0 /backups/backup_loja_20240903.sql.gz loja_online 10.0.1.50:3307
     $0 --list
 
 ℹ️  Informações:
@@ -62,6 +64,7 @@ show_help() {
     • Cria o database se não existir
     • Faz backup de segurança antes da restauração
     • Logs detalhados em /logs/restore.log
+    • Permite restauração em servidor customizado (IP:PORTA)
 
 ⚠️  ATENÇÃO:
     A restauração irá SOBRESCREVER os dados existentes no database!
@@ -264,15 +267,26 @@ restore_backup() {
     local server="${3:-dest}"
     
     # Definir servidor de destino
-    local host port
-    if [[ "$server" == "source" ]]; then
+    local host port server_label
+    
+    # Verificar se o servidor é um IP:PORTA customizado
+    if [[ "$server" =~ ^([0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}):?([0-9]+)?$ ]]; then
+        # IP customizado fornecido (ex: 127.0.0.1:3306 ou 127.0.0.1)
+        host="${BASH_REMATCH[1]}"
+        port="${BASH_REMATCH[2]:-3306}"  # Porta padrão 3306 se não especificada
+        server_label="CUSTOMIZADO"
+        log "INFO" "🎯 Servidor de destino: ${server_label} (${host}:${port})"
+    elif [[ "$server" == "source" ]]; then
         host="$SOURCE_HOST"
         port="$SOURCE_PORT"
-        log "INFO" "🎯 Servidor de destino: ORIGEM (${host}:${port})"
+        server_label="ORIGEM"
+        log "INFO" "🎯 Servidor de destino: ${server_label} (${host}:${port})"
     else
+        # Padrão: usar servidor de destino
         host="$DEST_HOST"
         port="$DEST_PORT"
-        log "INFO" "🎯 Servidor de destino: DESTINO (${host}:${port})"
+        server_label="DESTINO"
+        log "INFO" "🎯 Servidor de destino: ${server_label} (${host}:${port})"
     fi
     
     # Testar conectividade
@@ -289,11 +303,25 @@ restore_backup() {
     
     # Criar database se não existir
     log "INFO" "🗃️  Criando database '$database' se não existir..."
+    local create_error=$(mktemp)
     if mysql -h"$host" -P"$port" -u"$DB_USERNAME" -p"$DB_PASSWORD" \
-        -e "CREATE DATABASE IF NOT EXISTS \`$database\`;" 2>/dev/null; then
+        -e "CREATE DATABASE IF NOT EXISTS \`$database\`;" 2>"$create_error"; then
         log "SUCCESS" "✅ Database '$database' pronto"
+        rm -f "$create_error"
     else
         log "ERROR" "❌ Falha ao criar database '$database'"
+        log "ERROR" "   📋 Detalhes do erro:"
+        if [[ -s "$create_error" ]]; then
+            # Filtrar senha do erro antes de exibir
+            sed "s/-p[^ ]*/-p****/g" "$create_error" | while IFS= read -r line; do
+                log "ERROR" "      $line"
+            done
+        fi
+        log "ERROR" "   🔍 Verificações:"
+        log "ERROR" "      • Servidor: ${host}:${port}"
+        log "ERROR" "      • Usuário: ${DB_USERNAME}"
+        log "ERROR" "      • Permissões necessárias: CREATE DATABASE"
+        rm -f "$create_error"
         exit 1
     fi
     

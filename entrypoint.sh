@@ -153,7 +153,7 @@ setup_cron() {
         echo "WEBHOOK_URL=${WEBHOOK_URL}"
         echo ""
         echo "# Agendamento do backup"
-        echo "${BACKUP_TIME:-0 2 * * *} /scripts/backup.sh >> /logs/backup.log 2>&1"
+        echo "${BACKUP_TIME:-0 2 * * *} /bee-backup.sh backup >> /logs/backup.log 2>&1"
     } > "$cron_file"
     
     # Instalar o cron
@@ -226,14 +226,13 @@ main() {
             log "INFO" "📋 Iniciando em modo agendado (cron)"
             if ! test_connectivity; then
                 log "WARNING" "⚠️  Falha no teste de conectividade, mas continuando em modo cron"
-                log "WARNING" "⚠️  Use 'docker compose exec mariadb-backup /scripts/manual_backup.sh [database]' para testar manualmente"
             fi
             setup_cron
             
             # Executar backup inicial se configurado
             if [[ "${RUN_ON_START:-false}" == "true" ]]; then
                 log "INFO" "🔄 Executando backup inicial..."
-                /scripts/backup.sh
+                /bee-backup.sh backup
             fi
             
             log "INFO" "⏰ Iniciando daemon cron..."
@@ -245,61 +244,26 @@ main() {
             log "SUCCESS" "✅ Daemon cron iniciado com PID $cron_pid"
             log "INFO" "📅 Próximo backup agendado para: ${BACKUP_TIME:-0 2 * * *}"
             
-            # Loop principal para manter o container vivo e monitorar cron
+            # Loop principal para manter o container vivo
             while true; do
-                # Verificar se o cron ainda está rodando
                 if ! kill -0 $cron_pid 2>/dev/null; then
                     log "ERROR" "❌ Daemon cron parou! Reiniciando..."
                     crond -f -d 0 &
                     cron_pid=$!
                     log "SUCCESS" "✅ Daemon cron reiniciado com PID $cron_pid"
                 fi
-                
-                # Log de monitoramento a cada 5 minutos
-                current_minute=$(date +%M)
-                if [[ $((10#$current_minute % 5)) -eq 0 && $current_minute != $last_log_minute ]]; then
-                    log "INFO" "⏰ Sistema ativo - próximo backup: $(date -d "$(echo "${BACKUP_TIME:-0 2 * * *}" | awk '{print $2":"$1}')" +%H:%M) $(date +%d/%m/%Y)"
-                    last_log_minute=$current_minute
-                fi
-                
-                # Verificar a cada 30 segundos
                 sleep 30
             done
             ;;
-            
-        "backup")
-            log "INFO" "💾 Executando backup manual"
-            test_connectivity
-            exec /scripts/backup.sh
-            ;;
-            
-        "test")
-            log "INFO" "🧪 Executando teste de conectividade"
-            test_connectivity
-            log "SUCCESS" "✅ Todos os testes passaram!"
+        
+        # Comandos simplificados - delegar para bee-backup.sh
+        "backup"|"restore"|"list"|"test"|"clean")
+            exec /bee-backup.sh "$@"
             ;;
             
         "shell")
             log "INFO" "🐚 Iniciando shell interativo"
             exec /bin/bash
-            ;;
-            
-        "list")
-            log "INFO" "📋 Listando backups disponíveis"
-            exec /scripts/list_backups.sh
-            ;;
-            
-        "optimize")
-            log "INFO" "🔧 Executando análise de otimização"
-            local target_db="${2:-$DATABASES}"
-            exec /scripts/optimize_large_db.sh "$target_db"
-            ;;
-            
-        "monitor")
-            log "INFO" "📡 Iniciando monitoramento de backup"
-            local target_db="${2:-$DATABASES}"
-            local max_time="${3:-21600}"
-            exec /scripts/monitor_backup.sh "$target_db" "$max_time"
             ;;
         
         "healthcheck")
@@ -307,9 +271,8 @@ main() {
             ;;
             
         *)
-            log "ERROR" "❌ Modo inválido: $mode"
-            log "INFO" "Modos disponíveis: cron, backup, test, shell, list, optimize, monitor, healthcheck"
-            exit 1
+            # Qualquer outro comando, tenta executar via bee-backup.sh
+            exec /bee-backup.sh "$@"
             ;;
     esac
 }

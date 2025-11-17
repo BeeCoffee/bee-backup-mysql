@@ -1,50 +1,50 @@
+version: '3.8'
+
 services:
-  mariadb-backup:
+  bee-backup:
     build: .
-    container_name: mariadb_backup_scheduler
-    hostname: backup-scheduler
-    restart: unless-stopped
-    network_mode: host
-    privileged: true
-    
-    # Configurações de ambiente
-    env_file:
-      - .env
-    
-    # Volumes para persistência
+    container_name: bee-backup
+    hostname: bee-backup
+    env_file: .env
     volumes:
-      - ./backups:/backups:rw
-      - ./logs:/logs:rw
-      - ./config:/config:rw
-      - ./scripts:/scripts:rw
-      - /etc/localtime:/etc/localtime:ro
-    
-    # Healthcheck personalizado
+      - ./backups:/backups
+      - ./logs:/logs
+    restart: unless-stopped
     healthcheck:
       test: ["CMD", "/scripts/healthcheck.sh"]
-      interval: 30s
+      interval: 5m
       timeout: 10s
       retries: 3
-      start_period: 10s
-    
-    # Configurações de recursos (opcional)
-    deploy:
-      resources:
-        limits:
-          memory: 512M
-          cpus: '0.5'
-        reservations:
-          memory: 128M
-          cpus: '0.1'
-    
-    # Labels para organização
-    labels:
-      - "com.backup.service=mariadb-mysql"
-      - "com.backup.environment=production"
-      - "com.backup.version=1.0"
+      start_period: 30s
+    networks:
+      - backup-network
 
-# Rede isolada para o serviço (desabilitada - usando host network)
-# networks:
-#   backup_network:
-#     driver: bridge
-#     name: backup_network
+networks:
+  backup-network:
+    driver: bridge
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 🐝 BEE BACKUP - Como usar
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#
+# INICIAR:
+#   docker-compose up -d
+#
+# COMANDOS PRINCIPAIS:
+#   docker exec bee-backup backup           # Backup dos bancos do .env
+#   docker exec bee-backup backup full      # Backup de TODOS os bancos
+#   docker exec bee-backup backup restore   # Backup + restaura no destino
+#   docker exec bee-backup restore          # Restaura bancos do .env
+#   docker exec bee-backup restore full     # Restaura todos os backups
+#   docker exec bee-backup list             # Lista backups
+#   docker exec bee-backup test             # Testa conexão
+#   docker exec bee-backup clean            # Remove backups antigos
+#
+# LOGS:
+#   docker logs -f bee-backup
+#   docker exec bee-backup tail -f /logs/backup.log
+#
+# PARAR:
+#   docker-compose down
+#
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
